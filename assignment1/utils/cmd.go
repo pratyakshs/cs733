@@ -66,6 +66,12 @@ func ParseCmd(reader *bufio.Reader, buf []byte, cmdLen int) (*Cmd, error) {
 			return &cmd, errors.New("content not of expected length")
 		}
 		cmd.Content = contentBuf
+
+	case "read", "delete":
+		if l != 2 {
+			return &cmd, errors.New("invalid number of arguments")
+		}
+
 	case "cas":
 		if l > 5 || l < 4 {
 			return &cmd, errors.New("invalid number of arguments")
