@@ -43,11 +43,11 @@ type AppendEntriesResp struct {
 }
 
 type VoteReq struct {
-	From         int
-	Term         int
-	CandidateId  int
-	LastLogIndex int
-	LastLogTerm  int
+	From        int
+	Term        int
+	CandidateId int
+	LastIndex   int
+	LastTerm    int
 }
 
 type VoteResp struct {
@@ -56,25 +56,31 @@ type VoteResp struct {
 	VoteGranted bool
 }
 
+type LogStore struct {
+	From  int
+	Index int
+	Data  []byte
+}
+
 type StateMachine struct {
-	CurrentTerm  int
-	LeaderID     int
-	ServerID     int
-	State        string
-	VoteGranted  map[int]bool
-	VotedFor     int
-	NextIndex    map[int]int
-	MatchIndex   map[int]int
-	CommitIndex  int
-	Log          []LogEntry
-	clientCh     chan interface{}
-	netCh        chan interface{}
-	actionCh     chan interface{}
-	Timer        *time.Timer
-	Mutex        sync.RWMutex
-	PeerChan     map[int](chan interface{})
-	LastLogIndex int //??
-	LastLogTerm  int //??
+	Term        int
+	LeaderID    int
+	ServerID    int
+	State       string
+	VoteGranted map[int]bool
+	VotedFor    int
+	NextIndex   map[int]int
+	MatchIndex  map[int]int
+	CommitIndex int
+	Log         []LogEntry
+	clientCh    chan interface{}
+	netCh       chan interface{}
+	actionCh    chan interface{}
+	Timer       *time.Timer
+	Mutex       sync.RWMutex
+	PeerChan    map[int](chan interface{})
+	LastIndex   int //??
+	LastTerm    int //??
 }
 
 func (sm *StateMachine) getLogTerm(i int) int {
@@ -85,59 +91,75 @@ func (sm *StateMachine) getLogTerm(i int) int {
 	}
 }
 
-func (sm *StateMachine) doAppendEntriesReq(msg AppendEntriesReq) {
+func (sm *StateMachine) stepDown(newTerm int) {
+	sm.Term = newTerm
+	sm.VotedFor = -1
+	sm.NextIndex = nil
+	sm.MatchIndex = nil
+	sm.State = "Follower"
+	sm.VoteGranted = nil
+}
 
-	if sm.CurrentTerm < msg.Term {
-		sm.CurrentTerm = msg.Term
-		sm.VotedFor = -1
+func (sm *StateMachine) countVotes() int {
+	count := 0
+	for _, vote := range sm.VoteGranted {
+		if vote {
+			count += 1
+		}
+	}
+	return count
+}
+
+func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
+
+	if sm.Term < msg.Term {
+		sm.stepDown(msg.Term)
 		sm.LeaderID = msg.LeaderID
-		sm.State = "Follower"
 	}
 
-	if (sm.CurrentTerm) > msg.Term {
-		// action = Send(msg.leaderId, AppendEntriesResp(sm.currentTerm, success=no, nil))
+	if (sm.Term) > msg.Term {
+		sm.actionCh <- AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: -1, Success: false}
 	} else {
+		//TODO: send alarm message
 		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
-		check := msg.PrevLogIndex == -1 || (msg.PrevLogIndex <= len(sm.Log)-1 && sm.getLogTerm(msg.PrevLogIndex) == msg.PrevLogTerm)
+		checkPrevTerm := (msg.PrevLogIndex < len(sm.Log) && sm.getLogTerm(msg.PrevLogIndex) == msg.PrevLogTerm)
+		check := msg.PrevLogIndex == -1 || checkPrevTerm
+
 		var matchIndex int
 		if check {
-			sm.LastLogIndex = msg.PrevLogIndex + len(msg.Entries)
+			sm.LastIndex = msg.PrevLogIndex + len(msg.Entries)
 			i := msg.PrevLogIndex
-			for j := 0; j < len(msg.Entries); j += 1 {
+			for _, entry := range msg.Entries {
 				i += 1
-				// LogStore(i, msg.entries[j])
+				//TODO: check if term at index i is different from the new log entry's term
+				sm.actionCh <- LogStore{From: sm.ServerID, Index: i, Data: entry.Data}
+				//TODO: write code for actual log store
 			}
-			sm.LastLogTerm = sm.CurrentTerm
-			// action = Send(msg.leaderID, AppendEntriesResp(sm.currentTerm,
-			// 			  sm.lastLogIndex, success =yes))
-			if msg.LeaderCommit < sm.LastLogIndex {
+			sm.LastTerm = sm.Term
+			if msg.LeaderCommit < sm.LastIndex {
 				sm.CommitIndex = msg.LeaderCommit
 			} else {
-				sm.CommitIndex = sm.LastLogIndex
+				sm.CommitIndex = sm.LastIndex
 			}
-			matchIndex = sm.LastLogIndex
+			matchIndex = sm.LastIndex
 		} else {
-			matchIndex = 0
+			matchIndex = -1
 		}
-		fmt.Println(matchIndex) //??
-		// action = Send(msg.leaderId, AppendEntriesResp(sm.currentTerm,
-		// 			 success=yes, matchIndex))
+		sm.actionCh <- AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: matchIndex, Success: true}
 	}
 }
 
-func (sm *StateMachine) doAppendEntriesResp(msg AppendEntriesResp) {
-	if sm.CurrentTerm < msg.Term {
-		sm.CurrentTerm = msg.Term
-		sm.VotedFor = -1
-		sm.State = "Follower"
+func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
+	if sm.Term < msg.Term {
+		sm.stepDown(msg.Term)
 	}
 
 	if sm.State == "Leader" {
-
-		// if sm.CurrentTerm < msg.Term:
+		//FIXME: should update sm.LeaderID if response if from higher term
+		// if sm.Term < msg.Term:
 		// sm.LeaderID = msg.LeaderID
 
-		if sm.CurrentTerm == msg.Term {
+		if sm.Term == msg.Term {
 			if msg.Success {
 				sm.MatchIndex[msg.From] = msg.MatchIndex
 				sm.NextIndex[msg.From] = msg.MatchIndex + 1
@@ -146,11 +168,9 @@ func (sm *StateMachine) doAppendEntriesResp(msg AppendEntriesResp) {
 					sm.NextIndex[msg.From] = len(sm.Log) - 1
 					prevLogIndex := sm.NextIndex[msg.From] - 1
 					prevLogTerm := sm.getLogTerm(prevLogIndex)
-					fmt.Println(prevLogTerm)
-					// funcall = AppendEntriesReq(sm.term, sm.Id, prevLogIndex, prevLogTerm,
-					// entries[sm.nextIndex[msg.from]:len(log)],
-					// leaderCommit)
-					// action = Send(msg.from, funcall)
+					sm.actionCh <- AppendEntriesReq{Term: sm.Term, LeaderID: sm.ServerID, PrevLogIndex: prevLogIndex,
+						PrevLogTerm: prevLogTerm, Entries: sm.Log[sm.NextIndex[msg.From]:len(sm.Log)],
+						LeaderCommit: sm.CommitIndex}
 				}
 
 				cnt := 0
@@ -178,60 +198,79 @@ func (sm *StateMachine) doAppendEntriesResp(msg AppendEntriesResp) {
 	}
 }
 
-func (sm *StateMachine) doVoteReq(msg VoteReq) {
-	if sm.CurrentTerm < msg.Term {
+func (sm *StateMachine) onVoteReq(msg VoteReq) {
+	if sm.Term < msg.Term {
 		sm.State = "Follower"
-		sm.CurrentTerm = msg.Term
+		sm.Term = msg.Term
 		sm.VotedFor = -1
 		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
 	}
 
-	if (sm.CurrentTerm == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateId) {
-		if msg.LastLogTerm > sm.getLogTerm(-1) || (msg.LastLogTerm == sm.getLogTerm(-1) && msg.LastLogIndex >= len(sm.Log)-1) { // ??
-			sm.CurrentTerm = msg.Term
+	if (sm.Term == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateId) {
+		if msg.LastTerm > sm.getLogTerm(-1) || (msg.LastTerm == sm.getLogTerm(-1) && msg.LastIndex >= len(sm.Log)-1) { // ??
+			sm.Term = msg.Term
 			sm.VotedFor = msg.CandidateId
-			// action = Send(msg.From, VoteResp(sm.CurrentTerm, voteGranted=yes))
+			// action = Send(msg.From, VoteResp(sm.Term, voteGranted=yes))
 		}
 	} else { // reject vote:
 		// action = Send(msg.from, VoteResp(sm.term, voteGranted=no))
 	}
 }
 
-func (sm *StateMachine) doVoteResp(msg VoteResp) {
-	if sm.CurrentTerm < msg.Term {
-		sm.CurrentTerm = msg.Term
+func (sm *StateMachine) onVoteResp(msg VoteResp) {
+	if sm.Term < msg.Term {
+		sm.Term = msg.Term
 		sm.VotedFor = -1
 		sm.State = "Follower"
 	}
 
 	if sm.State == "Candidate" {
 
-		if sm.CurrentTerm == msg.Term {
+		if sm.Term == msg.Term {
 			sm.VoteGranted[msg.From] = msg.VoteGranted
 		}
 
-		if countVotes(sm.VoteGranted) > NUM_SERVERS/2 {
+		if sm.countVotes() > NUM_SERVERS/2 {
 			sm.State = "Leader"
 			sm.LeaderID = sm.ServerID
 			for peer := range sm.PeerChan {
 				sm.NextIndex[peer] = len(sm.Log) // ??
 				sm.MatchIndex[peer] = -1
-				// send(peer, AppendEntriesReq(sm.Id, sm.term, sm.lastLogIndex, sm.lastLogTerm, [], sm.commitIndex))
+				// send(peer, AppendEntriesReq(sm.Id, sm.term, sm.LastIndex, sm.LastTerm, [], sm.commitIndex))
 			}
 			// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
 		}
 	}
 }
 
-func countVotes(VoteGranted map[int]bool) (count int) {
-	count = 0
-	for _, vote := range VoteGranted {
-		if vote {
-			count += 1
-		}
-	}
-	return
-}
+//func (sm *StateMachine) onTimeout() {
+//
+//	switch sm.State {
+//	case "Leader":
+//		for peer, _ := range sm.PeerChan {
+//	       send(peer, AppendEntriesReq(sm.Id, sm.term, sm.LastIndex, sm.LastTerm,
+//	       	    [], sm.commitIndex))
+//	   }
+//		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+//	case "Candidate", "Follower":
+//		sm.State = "Candidate"
+//    // Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+//
+//	    sm.Term += 1
+//	    sm.VotedFor = sm.ServerID
+//			i := msg.PrevLogIndex
+//			for j := 0; j < len(msg.Entries); j += 1 {
+//				i += 1
+//	    sm.VoteGranted = make(map[int]bool)
+//	    sm.voteGranted[sm.ServerID] = true	// all other entries false
+//
+//	    for each peer:
+//	   		action = Send(peer, VoteReq(sm.Id, sm.term, sm.Id, sm.LastIndex,
+//	   					  sm.LastTerm))
+//
+//	}
+//
+//}
 
 func (sm *StateMachine) eventLoop() {
 	for {
@@ -244,13 +283,13 @@ func (sm *StateMachine) eventLoop() {
 			t := reflect.TypeOf(peerMsg)
 			switch t.Name() {
 			case "AppendEntriesReq":
-				go sm.doAppendEntriesReq(peerMsg.(AppendEntriesReq))
+				go sm.onAppendEntriesReq(peerMsg.(AppendEntriesReq))
 			case "AppendEntriesResp":
-				go sm.doAppendEntriesResp(peerMsg.(AppendEntriesResp))
+				go sm.onAppendEntriesResp(peerMsg.(AppendEntriesResp))
 			case "VoteResp":
-				go sm.doVoteResp(peerMsg.(VoteResp))
+				go sm.onVoteResp(peerMsg.(VoteResp))
 			case "VoteReq":
-				go sm.doVoteReq(peerMsg.(VoteReq))
+				go sm.onVoteReq(peerMsg.(VoteReq))
 			}
 		}
 	}
