@@ -3,6 +3,7 @@ package main
 // package raft
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -10,11 +11,17 @@ import (
 )
 
 const (
-	ELECTION_TIMEOUT  = 150 // milliseconds
-	HEARTBEAT_TIMEOUT = 50  // milliseconds
-	NUM_SERVERS       = 5
+	// ElectionTimeout constant in millisecond units
+	ElectionTimeout = 150
+
+	// HeartbeatTimeout constant in millisecond units
+	HeartbeatTimeout = 50
+
+	// NumServers is the hardcoded number of Raft servers
+	NumServers = 5
 )
 
+// LogEntry is the type for a single entry in the log
 type LogEntry struct {
 	Data      []byte
 	Committed bool
@@ -22,10 +29,12 @@ type LogEntry struct {
 	LogIndex  int
 }
 
+// AppendMsg is the type for a log append request from a client
 type AppendMsg struct {
 	Data []byte
 }
 
+// AppendEntriesReq is the type for an append entries request from a leader
 type AppendEntriesReq struct {
 	Term         int
 	LeaderID     int
@@ -35,6 +44,7 @@ type AppendEntriesReq struct {
 	LeaderCommit int
 }
 
+// AppendEntriesResp is the type for the response of an append entries request sent back to the leader
 type AppendEntriesResp struct {
 	From       int
 	Term       int
@@ -42,26 +52,30 @@ type AppendEntriesResp struct {
 	Success    bool
 }
 
+// VoteReq is the type for the vote request send by a candidate to its peers
 type VoteReq struct {
 	From        int
 	Term        int
-	CandidateId int
+	CandidateID int
 	LastIndex   int
 	LastTerm    int
 }
 
+// VoteResp is the type for the response of a vote request sent back to the candidate
 type VoteResp struct {
 	From        int
 	Term        int
 	VoteGranted bool
 }
 
+// LogStore is the type representing a log store action
 type LogStore struct {
 	From  int
 	Index int
 	Data  []byte
 }
 
+// StateMachine represents a single raft node
 type StateMachine struct {
 	Term        int
 	LeaderID    int
@@ -86,9 +100,8 @@ type StateMachine struct {
 func (sm *StateMachine) getLogTerm(i int) int {
 	if i >= 0 {
 		return sm.Log[i].Term
-	} else {
-		return sm.Log[len(sm.Log)+i].Term
 	}
+	return sm.Log[len(sm.Log)+i].Term
 }
 
 func (sm *StateMachine) stepDown(newTerm int) {
@@ -104,7 +117,7 @@ func (sm *StateMachine) countVotes() int {
 	count := 0
 	for _, vote := range sm.VoteGranted {
 		if vote {
-			count += 1
+			count++
 		}
 	}
 	return count
@@ -121,7 +134,7 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 		sm.actionCh <- AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: -1, Success: false}
 	} else {
 		//TODO: send alarm message
-		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+		// Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
 		checkPrevTerm := (msg.PrevLogIndex < len(sm.Log) && sm.getLogTerm(msg.PrevLogIndex) == msg.PrevLogTerm)
 		check := msg.PrevLogIndex == -1 || checkPrevTerm
 
@@ -130,7 +143,7 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 			sm.LastIndex = msg.PrevLogIndex + len(msg.Entries)
 			i := msg.PrevLogIndex
 			for _, entry := range msg.Entries {
-				i += 1
+				i++
 				//TODO: check if term at index i is different from the new log entry's term
 				sm.actionCh <- LogStore{From: sm.ServerID, Index: i, Data: entry.Data}
 				//TODO: write code for actual log store
@@ -174,17 +187,17 @@ func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
 				}
 
 				cnt := 0
-				for peer, _ := range sm.PeerChan {
+				for peer := range sm.PeerChan {
 					if peer != sm.ServerID && sm.MatchIndex[peer] > sm.CommitIndex {
-						cnt += 1
+						cnt++
 					}
 				}
-				if cnt > NUM_SERVERS/2 {
-					sm.CommitIndex += 1
+				if cnt > NumServers/2 {
+					sm.CommitIndex++
 					// Commit(index, data, err)
 				}
 			} else {
-				sm.NextIndex[msg.From] -= 1
+				sm.NextIndex[msg.From]--
 				if sm.NextIndex[msg.From] < 0 {
 					sm.NextIndex[msg.From] = 0
 				}
@@ -203,13 +216,13 @@ func (sm *StateMachine) onVoteReq(msg VoteReq) {
 		sm.State = "Follower"
 		sm.Term = msg.Term
 		sm.VotedFor = -1
-		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+		// Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
 	}
 
-	if (sm.Term == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateId) {
+	if (sm.Term == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateID) {
 		if msg.LastTerm > sm.getLogTerm(-1) || (msg.LastTerm == sm.getLogTerm(-1) && msg.LastIndex >= len(sm.Log)-1) { // ??
 			sm.Term = msg.Term
-			sm.VotedFor = msg.CandidateId
+			sm.VotedFor = msg.CandidateID
 			// action = Send(msg.From, VoteResp(sm.Term, voteGranted=yes))
 		}
 	} else { // reject vote:
@@ -230,7 +243,7 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 			sm.VoteGranted[msg.From] = msg.VoteGranted
 		}
 
-		if sm.countVotes() > NUM_SERVERS/2 {
+		if sm.countVotes() > NumServers/2 {
 			sm.State = "Leader"
 			sm.LeaderID = sm.ServerID
 			for peer := range sm.PeerChan {
@@ -238,7 +251,7 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 				sm.MatchIndex[peer] = -1
 				// send(peer, AppendEntriesReq(sm.Id, sm.term, sm.LastIndex, sm.LastTerm, [], sm.commitIndex))
 			}
-			// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+			// Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
 		}
 	}
 }
@@ -251,10 +264,10 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 //	       send(peer, AppendEntriesReq(sm.Id, sm.term, sm.LastIndex, sm.LastTerm,
 //	       	    [], sm.commitIndex))
 //	   }
-//		// Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+//		// Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
 //	case "Candidate", "Follower":
 //		sm.State = "Candidate"
-//    // Alarm(time.now() + rand(1.0, 2.0) * ELECTION_TIMEOUT)
+//    // Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
 //
 //	    sm.Term += 1
 //	    sm.VotedFor = sm.ServerID
@@ -295,38 +308,28 @@ func (sm *StateMachine) eventLoop() {
 	}
 }
 
-func NewStateMachine() *StateMachine {
-	sm := StateMachine{
-		VoteGranted: make(map[int]bool),
-		NextIndex:   make(map[int]int),
-		MatchIndex:  make(map[int]int),
-		clientCh:    make(chan interface{}),
-		netCh:       make(chan interface{}),
-		actionCh:    make(chan interface{}),
-		VotedFor:    -1,
+// NewStateMachine creates a fresh Raft state machine with the given parameters
+func NewStateMachine(term int, leaderID int, serverID int, state string) (*StateMachine, error) {
+	switch state {
+	case "Follower", "Candidate", "Leader":
+		sm := StateMachine{
+			Term:        term,
+			LeaderID:    leaderID,
+			ServerID:    serverID,
+			State:       state,
+			VoteGranted: nil,
+			NextIndex:   nil,
+			MatchIndex:  nil,
+			clientCh:    make(chan interface{}),
+			netCh:       make(chan interface{}),
+			actionCh:    make(chan interface{}),
+			VotedFor:    -1,
+			CommitIndex: -1,
+		}
+		return &sm, nil
 	}
-	return &sm
+	return &StateMachine{}, errors.New("Invalid state parameter")
 }
 
 func main() {
-	sm1 := NewStateMachine()
-	go sm1.eventLoop()
-
-	sm2 := NewStateMachine()
-	go sm2.eventLoop()
-
-	// sm1.PeerChan = sm2.netCh
-	// sm2.PeerChan = sm1.netCh
-
-	// vr := VoteResp{From: 1, Term: 2, VoteGranted: true}
-
-	// sm2.netCh <- vr
-	// sm1.PeerChan <- vr
-	// time.Sleep(10 * time.Second)
-
-	// go func() {
-	// 	vR := <-sm.netCh
-	// 	fmt.Println(vR)
-	// }()
-	// sm.netCh <- vr
 }
