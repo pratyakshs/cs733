@@ -1,6 +1,4 @@
-package main
-
-// package raft
+package raft
 
 import (
 	"errors"
@@ -101,7 +99,7 @@ func (sm *StateMachine) getLogTerm(i int) int {
 	if i >= 0 {
 		return sm.Log[i].Term
 	}
-	return sm.Log[len(sm.Log)+i].Term
+	return sm.Log[len(sm.Log)+i].Term	//FIXME: not required
 }
 
 func (sm *StateMachine) stepDown(newTerm int) {
@@ -135,8 +133,10 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 	} else {
 		//TODO: send alarm message
 		// Alarm(time.now() + rand(1.0, 2.0) * ElectionTimeout)
-		checkPrevTerm := (msg.PrevLogIndex < len(sm.Log) && sm.getLogTerm(msg.PrevLogIndex) == msg.PrevLogTerm)
-		check := msg.PrevLogIndex == -1 || checkPrevTerm
+		check := msg.PrevLogIndex == -1
+		if !check {
+			check = (msg.PrevLogIndex < len(sm.Log) && sm.getLogTerm(msg.PrevLogIndex) == msg.PrevLogTerm)
+		}
 
 		var matchIndex int
 		if check {
@@ -286,26 +286,25 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 //}
 
 func (sm *StateMachine) eventLoop() {
-	for {
-		select {
-		case appendMsg := <-sm.clientCh:
-			t := reflect.TypeOf(appendMsg)
-			fmt.Println(t)
+	select {
+	case appendMsg := <-sm.clientCh:
+		t := reflect.TypeOf(appendMsg)
+		fmt.Println(t)
 
-		case peerMsg := <-sm.netCh:
-			t := reflect.TypeOf(peerMsg)
-			switch t.Name() {
-			case "AppendEntriesReq":
-				go sm.onAppendEntriesReq(peerMsg.(AppendEntriesReq))
-			case "AppendEntriesResp":
-				go sm.onAppendEntriesResp(peerMsg.(AppendEntriesResp))
-			case "VoteResp":
-				go sm.onVoteResp(peerMsg.(VoteResp))
-			case "VoteReq":
-				go sm.onVoteReq(peerMsg.(VoteReq))
-			}
+	case peerMsg := <-sm.netCh:
+		t := reflect.TypeOf(peerMsg)
+		switch t.Name() {
+		case "AppendEntriesReq":
+			go sm.onAppendEntriesReq(peerMsg.(AppendEntriesReq))
+		case "AppendEntriesResp":
+			go sm.onAppendEntriesResp(peerMsg.(AppendEntriesResp))
+		case "VoteResp":
+			go sm.onVoteResp(peerMsg.(VoteResp))
+		case "VoteReq":
+			go sm.onVoteReq(peerMsg.(VoteReq))
 		}
 	}
+
 }
 
 // NewStateMachine creates a fresh Raft state machine with the given parameters
@@ -329,7 +328,4 @@ func NewStateMachine(term int, leaderID int, serverID int, state string) (*State
 		return &sm, nil
 	}
 	return &StateMachine{}, errors.New("Invalid state parameter")
-}
-
-func main() {
 }
