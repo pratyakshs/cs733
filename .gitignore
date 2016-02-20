@@ -22,3 +22,8 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# Coverage outputs
+cover.html
+cover.out
+
