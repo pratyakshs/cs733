@@ -545,3 +545,124 @@ func TestAppendEntriesResp_Failure1(t *testing.T) {
 		t.Fatalf("Expected LeaderCommit '%d', got '%d'", sm.CommitIndex, response.LeaderCommit)
 	}
 }
+
+func TestLeaderTimeout(t *testing.T) {
+	sm, _ := NewStateMachine(1, 2, 3, "Leader")
+	sm.PeerList = []int{1, 2, 4, 5}
+	sm.NextIndex = map[int]int{1: 0, 2: 1, 4: 1, 5: 0}
+	sm.Log = []LogEntry{LogEntry{[]byte("foo"), 0}, LogEntry{[]byte("bar"), 1}}
+
+	sm.netCh <- Timeout{}
+	sm.eventLoop()
+
+	for _, peer := range sm.PeerList {
+		respMsg := <-sm.actionCh
+		respType := reflect.TypeOf(respMsg).Name()
+		if respType != "Send" {
+			t.Fatalf("Expected response type Send, got '%s'", respType)
+		}
+		dest := respMsg.(Send).To
+		respMsg = respMsg.(Send).Message
+		respType = reflect.TypeOf(respMsg).Name()
+
+		// Assertions about the response
+		switch {
+		case dest != peer:
+			t.Fatalf("Expected message destination '%d', got '%d'", peer, dest)
+		case respType != "AppendEntriesReq":
+			t.Fatalf("Expected response type AppendEntriesReq, got '%s'", respType)
+		}
+
+		response := respMsg.(AppendEntriesReq)
+		prevLogIndex := sm.NextIndex[peer] - 1
+		prevLogTerm := sm.getLogTerm(prevLogIndex)
+		numEntries := len(sm.Log) - sm.NextIndex[peer]
+		switch {
+		case response.Term != 1:
+			t.Fatalf("Expected Term '%d', got '%d'", 1, response.Term)
+		case response.LeaderID != 3:
+			t.Fatalf("Expected LeaderID '%d', got '%d'", 3, response.LeaderID)
+		case response.PrevLogIndex != prevLogIndex:
+			t.Fatalf("Expected PrevLogIndex '%d', got '%d'", prevLogIndex, response.PrevLogIndex)
+		case response.PrevLogTerm != prevLogTerm:
+			t.Fatalf("Expected PrevLogTerm '%d', got '%d'", prevLogTerm, response.PrevLogTerm)
+		case len(response.Entries) != numEntries:
+			t.Fatalf("Expected '%d' entries, got '%d'", numEntries, len(response.Entries))
+			//TODO: check contents of entries
+		//case string(response.Entries[0].Data) != "foo":
+		//	t.Fatalf("Expected entry: '%s', got '%s'", "foo", response.Entries[0].Data)
+		case response.LeaderCommit != sm.CommitIndex:
+			t.Fatalf("Expected LeaderCommit '%d', got '%d'", sm.CommitIndex, response.LeaderCommit)
+		}
+	}
+
+	alarmAction := <-sm.actionCh
+	alarmActionType := reflect.TypeOf(alarmAction).Name()
+	if alarmActionType != "Alarm" {
+		t.Fatalf("Expected action of type Alarm, got '%s", alarmActionType)
+	}
+}
+
+func TimeoutTest(t *testing.T, state string) {
+	sm, _ := NewStateMachine(1, 2, 3, state)
+	sm.PeerList = []int{1, 2, 4, 5}
+	sm.LastIndex = 5
+	sm.LastTerm = 1
+
+	sm.netCh <- Timeout{}
+	sm.eventLoop()
+
+	switch {
+	case sm.State != "Candidate":
+		t.Fatalf("Expected State 'Candidate', got '%s'", sm.State)
+	case sm.Term != 2:
+		t.Fatalf("Expected Term '%d', got '%d'", 2, sm.Term)
+	case sm.VoteGranted[3] != true:
+		t.Fatalf("Expected VoteGranted['%d'] = true, got false")
+	case sm.countVotes() != 1:
+		t.Fatalf("Expected vote count '%d', got '%d'", 1, sm.countVotes())
+	case sm.VotedFor != 3:
+		t.Fatalf("Expected VotedFor '%d', got '%d'", 3, sm.VotedFor)
+	}
+	for _, peer := range sm.PeerList {
+		reqMsg := <-sm.actionCh
+		reqType := reflect.TypeOf(reqMsg).Name()
+		if reqType != "Send" {
+			t.Fatalf("Expected response type Send, got '%s'", reqType)
+		}
+		dest := reqMsg.(Send).To
+		reqMsg = reqMsg.(Send).Message
+		reqType = reflect.TypeOf(reqMsg).Name()
+
+		// Assertions about the vote request
+		switch {
+		case dest != peer:
+			t.Fatalf("Expected message destination '%d', got '%d'", peer, dest)
+		case reqType != "VoteReq":
+			t.Fatalf("Expected response type VoteReq, got '%s'", reqType)
+		}
+
+		request := reqMsg.(VoteReq)
+		switch {
+		case request.Term != 2:
+			t.Fatalf("Expected Term '%d', got '%d'", 2, request.Term)
+		case request.CandidateID != 3:
+			t.Fatalf("Expected CandidateID '%d', got '%d'", 3, request.CandidateID)
+		case request.LastIndex != 5:
+			t.Fatalf("Expected LastIndex '%d', got '%d'", 5, request.LastIndex)
+		case request.LastTerm != 1:
+			t.Fatalf("Expected LastTerm '%d', got '%d'", 1, request.LastTerm)
+		}
+	}
+
+	alarmAction := <-sm.actionCh
+	alarmActionType := reflect.TypeOf(alarmAction).Name()
+	if alarmActionType != "Alarm" {
+		t.Fatalf("Expected action of type Alarm, got '%s", alarmActionType)
+	}
+}
+
+func TestElectionTimeout(t *testing.T) {
+	TimeoutTest(t, "Follower")
+	TimeoutTest(t, "Candidate")
+}

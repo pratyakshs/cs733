@@ -65,6 +65,10 @@ type VoteResp struct {
 	VoteGranted bool
 }
 
+// Timeout is the type for an election timeout or heartbeat timeout message to a server
+type Timeout struct {
+}
+
 // LogStore is the type representing a log store action
 type LogStore struct {
 	From  int
@@ -236,13 +240,13 @@ func (sm *StateMachine) onVoteReq(msg VoteReq) {
 	}
 
 	var voteGranted bool
-	if (sm.Term == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateID) {
-		if msg.LastTerm > sm.LastTerm || (msg.LastTerm == sm.LastTerm && msg.LastIndex >= sm.LastIndex) {
-			sm.Term = msg.Term
-			sm.VotedFor = msg.CandidateID
-			voteGranted = true
-			sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
-		}
+	canVote := (sm.Term == msg.Term) && (sm.VotedFor == -1 || sm.VotedFor == msg.CandidateID)
+	canVoteYes := msg.LastTerm > sm.LastTerm || (msg.LastTerm == sm.LastTerm && msg.LastIndex >= sm.LastIndex)
+	if canVote && canVoteYes {
+		sm.Term = msg.Term
+		sm.VotedFor = msg.CandidateID
+		voteGranted = true
+		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
 	} else { // reject vote
 		voteGranted = false
 	}
@@ -280,34 +284,32 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 	}
 }
 
-//func (sm *StateMachine) onTimeout() {
-//
-//	switch sm.State {
-//	case "Leader":
-//		for _, peer := range sm.PeerList {
-//	       send(peer, AppendEntriesReq(sm.Id, sm.term, sm.LastIndex, sm.LastTerm,
-//	       	    [], sm.commitIndex))
-//	   }
-//		// 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
-//	case "Candidate", "Follower":
-//		sm.State = "Candidate"
-//    // 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
-//
-//	    sm.Term += 1
-//	    sm.VotedFor = sm.ServerID
-//			i := msg.PrevLogIndex
-//			for j := 0; j < len(msg.Entries); j += 1 {
-//				i += 1
-//	    sm.VoteGranted = make(map[int]bool)
-//	    sm.voteGranted[sm.ServerID] = true	// all other entries false
-//
-//	    for each peer:
-//	   		action = Send(peer, VoteReq(sm.Id, sm.term, sm.Id, sm.LastIndex,
-//	   					  sm.LastTerm))
-//
-//	}
-//
-//}
+func (sm *StateMachine) onTimeout() {
+
+	switch sm.State {
+	case "Leader":
+		for _, peer := range sm.PeerList {
+			prevLogIndex := sm.NextIndex[peer] - 1
+			prevLogTerm := sm.getLogTerm(prevLogIndex)
+			// Heartbeat will be empty if sm.NextIndex[peer] == len(sm.Log)
+			msg := Send{peer, AppendEntriesReq{LeaderID: sm.ServerID, Term: sm.Term,
+				PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm,
+				Entries: sm.Log[prevLogIndex+1 : len(sm.Log)], LeaderCommit: sm.CommitIndex}}
+			sm.actionCh <- msg
+		}
+		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(HeartbeatTimeout)}
+	case "Candidate", "Follower":
+		sm.State = "Candidate"
+		sm.Term++
+		sm.VoteGranted = map[int]bool{sm.ServerID: true}
+		sm.VotedFor = sm.ServerID
+		for _, peer := range sm.PeerList {
+			sm.actionCh <- Send{peer, VoteReq{Term: sm.Term, CandidateID: sm.ServerID,
+				LastIndex: sm.LastIndex, LastTerm: sm.LastTerm}}
+		}
+		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
+	}
+}
 
 func (sm *StateMachine) eventLoop() {
 	select {
@@ -326,6 +328,8 @@ func (sm *StateMachine) eventLoop() {
 			sm.onVoteResp(peerMsg.(VoteResp))
 		case "VoteReq":
 			sm.onVoteReq(peerMsg.(VoteReq))
+		case "Timeout":
+			sm.onTimeout()
 		}
 		//TODO: write handler code for Alarm, LogStore messages
 	}
