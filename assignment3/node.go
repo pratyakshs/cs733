@@ -1,18 +1,23 @@
 package raft
 
 import (
+	"encoding/gob"
+	"fmt"
 	"github.com/cs733-iitb/cluster"
 	"github.com/cs733-iitb/log"
 	"github.com/syndtr/goleveldb/leveldb"
+	"math/rand"
 	"os"
+	"reflect"
 	"strconv"
 	"sync"
+	"time"
 )
 
-const ROOT_DIR = os.Getenv("GOPATH") + "src/github.com/pratyakshs/cs733/assignment3/"
-const CONFIG_FILE = ROOT_DIR + "raft_config.json"
-const LOG_DIR = ROOT_DIR + "logs/"
-const DB_DIR = ROOT_DIR + "db/"
+var ROOT_DIR = os.Getenv("GOPATH") + "src/github.com/pratyakshs/cs733/assignment3/"
+var CONFIG_FILE = ROOT_DIR + "raft_config.json"
+var LOG_DIR = ROOT_DIR + "logs/"
+var DB_DIR = ROOT_DIR + "db/"
 
 type Node interface {
 	// Client's message to Raft node
@@ -58,9 +63,12 @@ type RaftNode struct {
 	server   cluster.Server
 	log      *log.Log
 	config   Config
+	clientCh chan AppendMsg
 	commitCh chan CommitInfo
 	mutex    *sync.RWMutex
 	db       *leveldb.DB
+	shutdown bool
+	timer    *time.Timer
 	//TODO: do we need any other channels
 }
 
@@ -72,13 +80,15 @@ func (node *RaftNode) CommitChannel() <-chan CommitInfo {
 	return node.commitCh
 }
 
-func (node *RaftNode) Get(index int64) (error, []byte) {
+func (node *RaftNode) Get(index int64) ([]byte, error) {
 	node.mutex.RLock()
 	defer node.mutex.RUnlock()
-	return node.sm.CommitIndex
+	data, err := node.log.Get(index)
+	entry := data.(LogEntry)
+	return entry.Data, err
 }
 
-func (node *RaftNode) CommittedIndex() <-chan CommitInfo {
+func (node *RaftNode) CommittedIndex() int {
 	node.mutex.RLock()
 	defer node.mutex.RUnlock()
 	return node.sm.CommitIndex
@@ -95,6 +105,7 @@ func (node *RaftNode) LeaderId() int {
 }
 
 func (node *RaftNode) ShutDown() {
+	node.shutdown = true
 	//TODO: close channels
 	//TODO: close leveldb
 	//TODO: Stop timers
@@ -102,26 +113,22 @@ func (node *RaftNode) ShutDown() {
 	//TODO: node.server.Close()
 }
 
-//FIXME: for config - pointer or object?
-func NewRaftNode(conf *Config) (Node, error) {
-
+func NewRaftNode(conf Config) (RaftNode, error) {
 	var node RaftNode
 	var err error
-
-	node.sm = NewStateMachine(0, -1, conf.Id, "Follower")
-	cluster_config, err := cluster.ToConfig(CONFIG_FILE)
-	if err != nil {
-		return node, err
-	}
-	node.server, err = cluster.New(conf.Id, cluster_config)
-	if err != nil {
-		return node, err
-	}
 
 	node.log, err = log.Open(conf.LogFile)
 	if err != nil {
 		return node, err
 	}
+	fmt.Print("RaftCreated ")
+	fmt.Println(conf.Id)
+	node.sm, err = NewStateMachineBoot(&conf, node.log)
+	if err != nil {
+		return node, err
+	}
+
+	node.server, _ = cluster.New(conf.Id, CONFIG_FILE)
 
 	node.config = conf
 
@@ -130,22 +137,28 @@ func NewRaftNode(conf *Config) (Node, error) {
 	//TODO: initialize other channels..
 	node.mutex = &sync.RWMutex{}
 
-	node.db = leveldb.Open(DB_DIR+string(conf.Id), nil)
+	node.db, err = leveldb.OpenFile(DB_DIR+strconv.Itoa(conf.Id), nil)
+	if err != nil {
+		return node, err
+	}
+	defer node.db.Close()
+
 	term, err := node.db.Get([]byte("term"), nil)
 	if err != nil {
 		node.sm.Term = 0
 	} else {
-		node.sm.Term = strconv.Atoi(string(term))
+		node.sm.Term, _ = strconv.Atoi(string(term))
 	}
 
 	votedFor, err := node.db.Get([]byte("votedFor"), nil)
 	if err != nil {
 		node.sm.VotedFor = -1
 	} else {
-		node.sm.VotedFor = strconv.Atoi(string(votedFor))
+		node.sm.VotedFor, _ = strconv.Atoi(string(votedFor))
 	}
+	node.shutdown = false
 
-	return node
+	return node, nil
 }
 
 func GetConfig() (Config, error) {
@@ -166,13 +179,54 @@ func makeRaftNodes() []RaftNode {
 	if err != nil {
 
 	}
+	fmt.Println(len(conf.cluster))
 	for i := 0; i < len(conf.cluster); i++ {
 		conf.Id = i
-		conf.LogFile = LOG_DIR + string(i)
-		rafts = append(rafts, NewRaftNode(conf))
-
-		//FIXME:
-		rafts[i].server, _ = cluster.New(i, conf)
+		conf.LogFile = LOG_DIR + strconv.Itoa(i)
+		node, _ := NewRaftNode(conf)
+		rafts = append(rafts, node)
 	}
 	return rafts
+}
+
+func (node *RaftNode) eventLoop() {
+	if node.sm.State == "Leader" {
+		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout+rand.Intn(20000)) * time.Millisecond)
+	} else {
+		fmt.Println("TimerSet")
+		node.timer = time.NewTimer(time.Duration(ElectionTimeout+rand.Intn(2000)) * time.Millisecond)
+	}
+
+	for !node.shutdown {
+		select {
+		case env := <-node.server.Inbox():
+			msg := env.Msg
+			node.sm.netCh <- msg
+			go node.sm.eventLoop()
+		case appendMsg := <-node.clientCh:
+			node.sm.clientCh <- appendMsg
+			go node.sm.eventLoop()
+		case <-node.timer.C:
+			node.sm.netCh <- Timeout{}
+			go node.sm.eventLoop()
+		case action := <-node.sm.actionCh:
+			t := reflect.TypeOf(action)
+			if t.Name() == "Send" {
+				env, _ := action.(Send)
+				node.server.Outbox() <- &cluster.Envelope{Pid: env.To, Msg: env.Message}
+			} else if t.Name() == "Alarm" {
+				alarm, _ := action.(Alarm)
+				node.timer.Reset(alarm.AlarmTime)
+			}
+		}
+	}
+}
+
+func initRaft() {
+	gob.Register(AppendEntriesReq{})
+	gob.Register(AppendEntriesResp{})
+	gob.Register(VoteReq{})
+	gob.Register(VoteResp{})
+	gob.Register(Timeout{})
+	gob.Register(AppendMsg{})
 }

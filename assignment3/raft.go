@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"github.com/cs733-iitb/log"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -78,7 +79,7 @@ type LogStore struct {
 
 // Alarm is the type representing a Alarm reset message(action)
 type Alarm struct {
-	AlarmTime time.Time
+	AlarmTime time.Duration
 }
 
 // Send is the type representing a Send-message action
@@ -135,8 +136,8 @@ func (sm *StateMachine) countVotes() int {
 	return count
 }
 
-func snoozeAlarmTime(n int32) time.Time {
-	return time.Now().Add(time.Duration(n+rand.Int31n(n)) * time.Millisecond)
+func snoozeAlarmTime(n int32) time.Duration {
+	return time.Duration(n+rand.Int31n(n)) * time.Millisecond
 }
 
 func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
@@ -333,7 +334,6 @@ func (sm *StateMachine) eventLoop() {
 		}
 		//TODO: write handler code for Alarm, LogStore messages
 	}
-
 }
 
 // NewStateMachine creates a fresh Raft state machine with the given parameters
@@ -357,4 +357,36 @@ func NewStateMachine(term int, leaderID int, serverID int, state string) (*State
 		return &sm, nil
 	}
 	return &StateMachine{}, errors.New("Invalid state parameter")
+}
+
+// NewStateMachineBoot creates/restores a Raft state machine from a given config and log
+func NewStateMachineBoot(conf *Config, log *log.Log) (*StateMachine, error) {
+	sm := StateMachine{
+		ServerID:    conf.Id,
+		State:       "Follower",
+		VoteGranted: nil,
+		NextIndex:   nil,
+		MatchIndex:  nil,
+		clientCh:    make(chan interface{}, 5),
+		netCh:       make(chan interface{}, 5),
+		actionCh:    make(chan interface{}, 5),
+		VotedFor:    -1,
+		CommitIndex: -1,
+		LeaderID:    -1,
+	}
+	sm.PeerList = make([]int, len(conf.cluster))
+	for i, peer := range conf.cluster {
+		sm.PeerList[i] = peer.Id
+	}
+
+	sm.Log = make([]LogEntry, 200)
+	size := int(log.GetLastIndex()) + 1
+	for i := 0; i < size; i++ {
+		data, _ := log.Get(int64(i))
+		entry := data.(LogEntry)
+		sm.Log[i] = entry
+	}
+	sm.LastIndex = size - 1
+	sm.LastTerm = sm.getLogTerm(size - 1)
+	return &sm, nil
 }
