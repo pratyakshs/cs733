@@ -141,7 +141,7 @@ func snoozeAlarmTime(n int32) time.Duration {
 }
 
 func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
-
+	//fmt.Println(sm.ServerID, "onAppendEntriesReq", msg)
 	if sm.Term < msg.Term {
 		sm.stepDown(msg.Term)
 		sm.LeaderID = msg.LeaderID
@@ -183,6 +183,7 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 }
 
 func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
+	//fmt.Println(sm.ServerID, "onAppendEntriesResp", msg)
 	if sm.Term < msg.Term {
 		sm.stepDown(msg.Term)
 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
@@ -236,6 +237,7 @@ func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
 }
 
 func (sm *StateMachine) onVoteReq(msg VoteReq) {
+	//fmt.Println(sm.ServerID, "OnVoteReq", msg)
 	if sm.Term < msg.Term {
 		sm.stepDown(msg.Term)
 	}
@@ -255,6 +257,7 @@ func (sm *StateMachine) onVoteReq(msg VoteReq) {
 }
 
 func (sm *StateMachine) onVoteResp(msg VoteResp) {
+	//fmt.Println(sm.ServerID, "onVoteResp", msg)
 	if sm.Term < msg.Term {
 		sm.stepDown(msg.Term)
 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
@@ -274,10 +277,10 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 				sm.MatchIndex[peer] = -1
 				prevLogIndex := sm.NextIndex[peer] - 1
 				prevLogTerm := sm.getLogTerm(prevLogIndex)
-				emptyEntry := LogEntry{Data: []byte{}, Term: sm.Term}
+				//emptyEntry := LogEntry{Data: []byte{}, Term: sm.Term}
 				req := AppendEntriesReq{Term: sm.Term, LeaderID: sm.ServerID,
 					PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm,
-					Entries: []LogEntry{emptyEntry}, LeaderCommit: sm.CommitIndex}
+					Entries: nil, LeaderCommit: sm.CommitIndex}
 				sm.actionCh <- Send{peer, req}
 			}
 			sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
@@ -286,7 +289,7 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 }
 
 func (sm *StateMachine) onTimeout() {
-
+	//fmt.Println(sm.ServerID, "onTimeout")
 	switch sm.State {
 	case "Leader":
 		for _, peer := range sm.PeerList {
@@ -379,7 +382,7 @@ func NewStateMachineBoot(conf *Config, log *log.Log) (*StateMachine, error) {
 		sm.PeerList[i] = peer.Id
 	}
 
-	sm.Log = make([]LogEntry, 200)
+	//sm.Log = make([]LogEntry, 200)
 	size := int(log.GetLastIndex()) + 1
 	for i := 0; i < size; i++ {
 		data, _ := log.Get(int64(i))
