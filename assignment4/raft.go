@@ -1,14 +1,15 @@
-package raft
+package main
 
 import (
 	"errors"
 	"fmt"
-	"github.com/cs733-iitb/log"
 	"math/rand"
 	"reflect"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cs733-iitb/log"
 )
 
 const (
@@ -250,7 +251,8 @@ func (sm *StateMachine) onVoteReq(msg VoteReq) {
 		sm.VotedFor = msg.CandidateID
 		voteGranted = true
 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
-	} else { // reject vote
+	} else {
+		// reject vote
 		voteGranted = false
 	}
 	sm.actionCh <- Send{msg.CandidateID, VoteResp{From: sm.ServerID, Term: sm.Term, VoteGranted: voteGranted}}
@@ -377,8 +379,8 @@ func NewStateMachineBoot(conf *Config, log *log.Log) (*StateMachine, error) {
 		CommitIndex: -1,
 		LeaderID:    -1,
 	}
-	sm.PeerList = make([]int, len(conf.cluster))
-	for i, peer := range conf.cluster {
+	sm.PeerList = make([]int, len(conf.Cluster))
+	for i, peer := range conf.Cluster {
 		sm.PeerList[i] = peer.Id
 	}
 

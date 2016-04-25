@@ -1,4 +1,4 @@
-package raft
+package main
 
 import (
 	"reflect"
@@ -588,7 +588,7 @@ func TestLeaderTimeout(t *testing.T) {
 			t.Fatalf("Expected PrevLogTerm '%d', got '%d'", prevLogTerm, response.PrevLogTerm)
 		case len(response.Entries) != numEntries:
 			t.Fatalf("Expected '%d' entries, got '%d'", numEntries, len(response.Entries))
-			//TODO: check contents of entries
+		//TODO: check contents of entries
 		//case string(response.Entries[0].Data) != "foo":
 		//	t.Fatalf("Expected entry: '%s', got '%s'", "foo", response.Entries[0].Data)
 		case response.LeaderCommit != sm.CommitIndex:

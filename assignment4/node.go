@@ -1,17 +1,18 @@
-package raft
+package main
 
 import (
 	"encoding/gob"
 	"fmt"
-	"github.com/cs733-iitb/cluster"
-	"github.com/cs733-iitb/log"
-	"github.com/syndtr/goleveldb/leveldb"
 	"math/rand"
 	"os"
 	"reflect"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/cs733-iitb/cluster"
+	"github.com/cs733-iitb/log"
+	"github.com/syndtr/goleveldb/leveldb"
 )
 
 var ROOT_DIR = os.Getenv("GOPATH") + "src/github.com/pratyakshs/cs733/assignment3/"
@@ -50,12 +51,26 @@ type CommitInfo struct {
 	Err   error // Err can be errred
 }
 
+type PeerConfig struct {
+	Id            int
+	Address       string
+	ClientAddress string
+}
+
+type NetConfig struct {
+	Id   int
+	Host string
+	Port int
+}
+
 type Config struct {
-	cluster    []cluster.PeerConfig // Information about all servers, including this.
-	Id         int                  // this node's id. One of the cluster's entries should match.
-	LogFile    string               // Log file for this node
-	InboxSize  int
-	OutboxSize int
+	Cluster          []PeerConfig // Information about all servers, including this.
+	Id               int          // this node's id. One of the cluster's entries should match.
+	LogFile          string       // Log file for this node
+	InboxSize        int
+	OutboxSize       int
+	ElectionTimeout  int
+	HeartbeatTimeout int
 }
 
 type RaftNode struct {
@@ -73,7 +88,10 @@ type RaftNode struct {
 }
 
 func (node *RaftNode) Append(data []byte) {
-	node.sm.clientCh <- AppendMsg{data}
+	//FIXME:
+	//node.sm.clientCh <- AppendMsg{data}
+	node.clientCh <- AppendMsg{data}
+	fmt.Println("written to channel")
 }
 
 func (node *RaftNode) CommitChannel() <-chan CommitInfo {
@@ -116,7 +134,6 @@ func (node *RaftNode) ShutDown() {
 func NewRaftNode(conf Config) (RaftNode, error) {
 	var node RaftNode
 	var err error
-
 	node.log, err = log.Open(conf.LogFile)
 	if err != nil {
 		return node, err
@@ -132,7 +149,8 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 
 	node.config = conf
 
-	node.commitCh = make(chan CommitInfo)
+	node.commitCh = make(chan CommitInfo, 5)
+	node.clientCh = make(chan AppendMsg, 5)
 
 	//TODO: initialize other channels..
 	node.mutex = &sync.RWMutex{}
@@ -161,26 +179,44 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 	return node, nil
 }
 
-func GetConfig() (Config, error) {
-	cluster_config, err := cluster.ToConfig(CONFIG_FILE)
-	var conf Config
-	if err != nil {
-		return conf, err
+func GetConfig(id int) Config {
+
+	return Config{
+		ElectionTimeout:  150,
+		HeartbeatTimeout: 50,
+		InboxSize:        100,
+		OutboxSize:       100,
+		Cluster: []PeerConfig{
+			PeerConfig{Id: 0, Address: "localhost:8001", ClientAddress: "localhost:9001"},
+			PeerConfig{Id: 1, Address: "localhost:8002", ClientAddress: "localhost:9002"},
+			PeerConfig{Id: 2, Address: "localhost:8003", ClientAddress: "localhost:9003"},
+			PeerConfig{Id: 3, Address: "localhost:8004", ClientAddress: "localhost:9004"},
+			PeerConfig{Id: 4, Address: "localhost:8005", ClientAddress: "localhost:9005"},
+		},
+		LogFile: LOG_DIR + strconv.FormatInt(int64(id), 10),
+		Id:      id,
 	}
-	conf.cluster = cluster_config.Peers
-	conf.InboxSize = cluster_config.InboxSize
-	conf.OutboxSize = cluster_config.OutboxSize
-	return conf, nil
+
+	//var cfg Config
+	//var f *os.File
+	//var err error
+	//if f, err = os.Open(CONFIG_FILE); err != nil {
+	//	return cfg, err
+	//}
+	//defer f.Close()
+	//dec := json.NewDecoder(f)
+	//if err = dec.Decode(&cfg); err != nil {
+	//	return cfg, err
+	//}
+	//return cfg, nil
+
 }
 
 func makeRaftNodes() []RaftNode {
 	var rafts []RaftNode
-	conf, err := GetConfig()
-	if err != nil {
-
-	}
-	fmt.Println(len(conf.cluster))
-	for i := 0; i < len(conf.cluster); i++ {
+	conf := GetConfig(0)
+	fmt.Println(len(conf.Cluster))
+	for i := 0; i < len(conf.Cluster); i++ {
 		conf.Id = i
 		conf.LogFile = LOG_DIR + strconv.Itoa(i)
 		node, _ := NewRaftNode(conf)
@@ -190,6 +226,7 @@ func makeRaftNodes() []RaftNode {
 }
 
 func (node *RaftNode) eventLoop() {
+
 	if node.sm.State == "Leader" {
 		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout+rand.Intn(20000)) * time.Millisecond)
 	} else {
@@ -205,6 +242,7 @@ func (node *RaftNode) eventLoop() {
 			go node.sm.eventLoop()
 		case appendMsg := <-node.clientCh:
 			node.sm.clientCh <- appendMsg
+			fmt.Println("Append msg received")
 			go node.sm.eventLoop()
 		case <-node.timer.C:
 			node.sm.netCh <- Timeout{}
@@ -221,6 +259,26 @@ func (node *RaftNode) eventLoop() {
 		}
 	}
 }
+
+//func New() RaftNode {
+//
+//}
+
+//func RestartNode(i int, clusterconf []NetConfig) RaftNode {
+//	ld := "myLogDir" + strconv.Itoa(i)
+//	sd := "StateId_" + strconv.Itoa(i)
+//	rn := NewRaftNode()
+//	rc := RaftConfig{cluster: clusterconf, Id: i, LogDir: ld, StateFile: sd, ElectionTimeout: eo, HeartbeatTimeout: 600}
+//	rs := New(rc)
+//	return RaftNode{}
+//
+//}
+
+//func BringNodeUp(i int, clusterconf []NetConfig) RaftNode {
+//	//TODO: initialize state on disk as follower and restart node
+//	_ = RestartNode(i, clusterconf)
+//	return RaftNode{}
+//}
 
 func initRaft() {
 	gob.Register(AppendEntriesReq{})
