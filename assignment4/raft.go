@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -14,10 +13,10 @@ import (
 
 const (
 	// ElectionTimeout constant in millisecond units
-	ElectionTimeout = 150
+	ElectionTimeout = 2000
 
 	// HeartbeatTimeout constant in millisecond units
-	HeartbeatTimeout = 50
+	HeartbeatTimeout = 250
 
 	// NumServers is the hardcoded number of Raft servers
 	NumServers = 5
@@ -73,9 +72,8 @@ type Timeout struct {
 
 // LogStore is the type representing a log store action
 type LogStore struct {
-	From  int
 	Index int
-	Data  []byte
+	Entry LogEntry
 }
 
 // Alarm is the type representing a Alarm reset message(action)
@@ -137,6 +135,16 @@ func (sm *StateMachine) countVotes() int {
 	return count
 }
 
+func (sm *StateMachine) LogIt(index int, entry LogEntry) {
+	if index < len(sm.Log) {
+		sm.Log[index] = entry
+	} else {
+		sm.Log = append(sm.Log, make([]LogEntry, index-len(sm.Log)+1)...)
+		sm.Log[index] = entry
+	}
+	sm.actionCh <- LogStore{Index: index, Entry: sm.Log[index]}
+}
+
 func snoozeAlarmTime(n int32) time.Duration {
 	return time.Duration(n+rand.Int31n(n)) * time.Millisecond
 }
@@ -165,21 +173,26 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 			for _, entry := range msg.Entries {
 				i++
 				//TODO: check if term at index i is different from the new log entry's term
-				sm.actionCh <- LogStore{From: sm.ServerID, Index: i, Data: entry.Data}
+				sm.LogIt(i, entry)
 				//TODO: write code for actual log store
 			}
 			sm.LastTerm = sm.Term
+			oldCommitIndex := sm.CommitIndex
 			if msg.LeaderCommit < sm.LastIndex {
 				sm.CommitIndex = msg.LeaderCommit
 			} else {
 				sm.CommitIndex = sm.LastIndex
 			}
 			matchIndex = sm.LastIndex
+			//FIXME: for loop or single action?
+			for i = oldCommitIndex + 1; i <= sm.CommitIndex; i++ {
+				sm.actionCh <- CommitInfo{Data: sm.Log[i].Data, Index: int64(i), Err: nil}
+			}
 		} else {
 			matchIndex = -1
 		}
 		sm.actionCh <- Send{msg.LeaderID,
-			AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: matchIndex, Success: true}}
+			AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: matchIndex, Success: check}}
 	}
 }
 
@@ -208,7 +221,11 @@ func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
 				sort.Ints(matchIndices)
 				n := matchIndices[NumServers/2]
 				if sm.getLogTerm(n) == sm.Term {
+					oldCommitIndex := sm.CommitIndex
 					sm.CommitIndex = n
+					for i := oldCommitIndex + 1; i <= sm.CommitIndex; i++ {
+						sm.actionCh <- CommitInfo{Data: sm.Log[i].Data, Index: int64(i), Err: nil}
+					}
 				}
 
 				if sm.MatchIndex[msg.From] < len(sm.Log)-1 {
@@ -317,12 +334,28 @@ func (sm *StateMachine) onTimeout() {
 	}
 }
 
+func (sm *StateMachine) onAppend(msg AppendMsg) {
+	switch sm.State {
+	case "Leader":
+		// append data to leader's local log and don't send to followers. let the append go to the followers through heartbeat
+		sm.LastIndex++
+		entry := LogEntry{Data: msg.Data, Term: sm.Term}
+		sm.Log = append(sm.Log, entry)
+		sm.actionCh <- LogStore{Entry: entry, Index: sm.LastIndex}
+	case "Follower", "Candidate":
+		//TODO: appendfollower
+
+	}
+}
+
 func (sm *StateMachine) eventLoop() {
+	//if sm.State != "Leader" {
+	//	fmt.Println("State: ", sm.State, "Index: ", sm.LastIndex, "Term: ", sm.Term)
+	//}
 	select {
 	case appendMsg := <-sm.clientCh:
-		t := reflect.TypeOf(appendMsg)
-		fmt.Println(t)
-
+		msg := appendMsg.(AppendMsg)
+		sm.onAppend(msg)
 	case peerMsg := <-sm.netCh:
 		t := reflect.TypeOf(peerMsg)
 		switch t.Name() {
@@ -353,9 +386,9 @@ func NewStateMachine(term int, leaderID int, serverID int, state string) (*State
 			VoteGranted: nil,
 			NextIndex:   nil,
 			MatchIndex:  nil,
-			clientCh:    make(chan interface{}, 5),
-			netCh:       make(chan interface{}, 5),
-			actionCh:    make(chan interface{}, 5),
+			clientCh:    make(chan interface{}, 1000),
+			netCh:       make(chan interface{}, 1000),
+			actionCh:    make(chan interface{}, 1000),
 			VotedFor:    -1,
 			CommitIndex: -1,
 		}
@@ -372,20 +405,21 @@ func NewStateMachineBoot(conf *Config, log *log.Log) (*StateMachine, error) {
 		VoteGranted: nil,
 		NextIndex:   nil,
 		MatchIndex:  nil,
-		clientCh:    make(chan interface{}, 5),
-		netCh:       make(chan interface{}, 5),
-		actionCh:    make(chan interface{}, 5),
+		clientCh:    make(chan interface{}, 1000),
+		netCh:       make(chan interface{}, 1000),
+		actionCh:    make(chan interface{}, 1000),
 		VotedFor:    -1,
 		CommitIndex: -1,
 		LeaderID:    -1,
 	}
-	sm.PeerList = make([]int, len(conf.Cluster))
-	for i, peer := range conf.Cluster {
+	sm.PeerList = make([]int, len(conf.Peers))
+	for i, peer := range conf.Peers {
 		sm.PeerList[i] = peer.Id
 	}
 
 	//sm.Log = make([]LogEntry, 200)
 	size := int(log.GetLastIndex()) + 1
+	sm.Log = make([]LogEntry, size)
 	for i := 0; i < size; i++ {
 		data, _ := log.Get(int64(i))
 		entry := data.(LogEntry)

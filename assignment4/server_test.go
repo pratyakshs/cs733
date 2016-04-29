@@ -33,8 +33,8 @@ func StartServer(i int, restartflag string) {
 
 func StartAllServerProcess() {
 	conf := GetConfig(0)
-	fileServer = make([]*exec.Cmd, len(conf.Cluster))
-	for i := 1; i <= len(conf.Cluster); i++ {
+	fileServer = make([]*exec.Cmd, len(conf.Peers))
+	for i := 1; i <= len(conf.Peers); i++ {
 		os.RemoveAll("myLogDir" + strconv.Itoa(i) + "/logfile")
 		os.RemoveAll("myStateDir" + strconv.Itoa(i) + "/mystate")
 		StartServer(i, "false")
@@ -50,7 +50,7 @@ func KillServer(i int) {
 
 func KillAllServerProcess() {
 	conf := GetConfig(0)
-	for i := 1; i <= len(conf.Cluster); i++ {
+	for i := 1; i <= len(conf.Peers); i++ {
 		KillServer(i)
 		os.RemoveAll("myLogDir" + strconv.Itoa(i) + "/logfile")
 		os.RemoveAll("myStateDir" + strconv.Itoa(i) + "/mystate")
@@ -223,7 +223,7 @@ func TestBasicMain(t *testing.T) {
 
 	var leader string
 
-	time.Sleep(100 * time.Second)
+	time.Sleep(25 * time.Second)
 
 	// make client connection to all the servers
 	nclients := 5

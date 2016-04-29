@@ -15,10 +15,11 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
-var ROOT_DIR = os.Getenv("GOPATH") + "src/github.com/pratyakshs/cs733/assignment3/"
+var ROOT_DIR = os.Getenv("GOPATH") + "src/github.com/pratyakshs/cs733/assignment4/"
 var CONFIG_FILE = ROOT_DIR + "raft_config.json"
 var LOG_DIR = ROOT_DIR + "logs/"
 var DB_DIR = ROOT_DIR + "db/"
+var FS_DIR = ROOT_DIR + "fs/"
 
 type Node interface {
 	// Client's message to Raft node
@@ -64,13 +65,11 @@ type NetConfig struct {
 }
 
 type Config struct {
-	Cluster          []PeerConfig // Information about all servers, including this.
-	Id               int          // this node's id. One of the cluster's entries should match.
-	LogFile          string       // Log file for this node
-	InboxSize        int
-	OutboxSize       int
-	ElectionTimeout  int
-	HeartbeatTimeout int
+	Peers      []PeerConfig // Information about all servers, including this.
+	Id         int          // this node's id. One of the cluster's entries should match.
+	LogFile    string       // Log file for this node
+	InboxSize  int
+	OutboxSize int
 }
 
 type RaftNode struct {
@@ -131,6 +130,10 @@ func (node *RaftNode) ShutDown() {
 	//TODO: node.server.Close()
 }
 
+//func ToClusterConfig(conf Config) cluster.Config {
+//	return cluster.Config{Peers: conf.Peers.([]cluster.PeerConfig), OutboxSize: conf.OutboxSize, InboxSize:conf.InboxSize}
+//}
+
 func NewRaftNode(conf Config) (RaftNode, error) {
 	var node RaftNode
 	var err error
@@ -138,19 +141,23 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 	if err != nil {
 		return node, err
 	}
-	fmt.Print("RaftCreated ")
-	fmt.Println(conf.Id)
+	fmt.Println("RaftCreated , logfile: ", conf.LogFile)
 	node.sm, err = NewStateMachineBoot(&conf, node.log)
 	if err != nil {
 		return node, err
 	}
+	fmt.Println("here1")
 
-	node.server, _ = cluster.New(conf.Id, CONFIG_FILE)
+	node.server, err = cluster.New(conf.Id, CONFIG_FILE)
+	if err != nil {
+		fmt.Println("Error in cluster")
+	}
+	fmt.Println("here2")
 
 	node.config = conf
 
-	node.commitCh = make(chan CommitInfo, 5)
-	node.clientCh = make(chan AppendMsg, 5)
+	node.commitCh = make(chan CommitInfo, 1000)
+	node.clientCh = make(chan AppendMsg, 1000)
 
 	//TODO: initialize other channels..
 	node.mutex = &sync.RWMutex{}
@@ -182,11 +189,9 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 func GetConfig(id int) Config {
 
 	return Config{
-		ElectionTimeout:  150,
-		HeartbeatTimeout: 50,
-		InboxSize:        100,
-		OutboxSize:       100,
-		Cluster: []PeerConfig{
+		InboxSize:  100,
+		OutboxSize: 100,
+		Peers: []PeerConfig{
 			PeerConfig{Id: 0, Address: "localhost:8001", ClientAddress: "localhost:9001"},
 			PeerConfig{Id: 1, Address: "localhost:8002", ClientAddress: "localhost:9002"},
 			PeerConfig{Id: 2, Address: "localhost:8003", ClientAddress: "localhost:9003"},
@@ -215,8 +220,8 @@ func GetConfig(id int) Config {
 func makeRaftNodes() []RaftNode {
 	var rafts []RaftNode
 	conf := GetConfig(0)
-	fmt.Println(len(conf.Cluster))
-	for i := 0; i < len(conf.Cluster); i++ {
+	fmt.Println(len(conf.Peers))
+	for i := 0; i < len(conf.Peers); i++ {
 		conf.Id = i
 		conf.LogFile = LOG_DIR + strconv.Itoa(i)
 		node, _ := NewRaftNode(conf)
@@ -239,23 +244,46 @@ func (node *RaftNode) eventLoop() {
 		case env := <-node.server.Inbox():
 			msg := env.Msg
 			node.sm.netCh <- msg
-			go node.sm.eventLoop()
+			node.sm.eventLoop()
 		case appendMsg := <-node.clientCh:
 			node.sm.clientCh <- appendMsg
 			fmt.Println("Append msg received")
-			go node.sm.eventLoop()
+			node.sm.eventLoop()
 		case <-node.timer.C:
 			node.sm.netCh <- Timeout{}
-			go node.sm.eventLoop()
+			node.sm.eventLoop()
 		case action := <-node.sm.actionCh:
 			t := reflect.TypeOf(action)
-			if t.Name() == "Send" {
+			switch t.Name() {
+			case "Send":
 				env, _ := action.(Send)
 				node.server.Outbox() <- &cluster.Envelope{Pid: env.To, Msg: env.Message}
-			} else if t.Name() == "Alarm" {
+			case "Alarm":
 				alarm, _ := action.(Alarm)
 				node.timer.Reset(alarm.AlarmTime)
+			case "LogStore":
+				ac := action.(LogStore)
+				node.LogStoreHandler(ac)
+			case "CommitInfo":
+				ac := action.(CommitInfo)
+				node.CommitHandler(ac)
 			}
+		}
+	}
+}
+
+func (node *RaftNode) CommitHandler(ac CommitInfo) {
+	node.commitCh <- ac
+}
+
+func (node *RaftNode) LogStoreHandler(ac LogStore) {
+	lastIndex := node.log.GetLastIndex()
+	if int(lastIndex) >= ac.Index {
+		node.log.TruncateToEnd(int64(ac.Index))
+	} else {
+		err := node.log.Append(ac.Entry)
+		if err != nil {
+			fmt.Println("log append failed! err = ", err)
 		}
 	}
 }
@@ -287,4 +315,5 @@ func initRaft() {
 	gob.Register(VoteResp{})
 	gob.Register(Timeout{})
 	gob.Register(AppendMsg{})
+	gob.Register(LogEntry{})
 }
