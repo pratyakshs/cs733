@@ -87,10 +87,7 @@ type RaftNode struct {
 }
 
 func (node *RaftNode) Append(data []byte) {
-	//FIXME:
-	//node.sm.clientCh <- AppendMsg{data}
 	node.clientCh <- AppendMsg{data}
-	fmt.Println("written to channel")
 }
 
 func (node *RaftNode) CommitChannel() <-chan CommitInfo {

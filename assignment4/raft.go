@@ -22,6 +22,8 @@ const (
 	NumServers = 5
 )
 
+var err_redirect = errors.New("Commit error - server not a leader. Redirect request...")
+
 // LogEntry is the type for a single entry in the log
 type LogEntry struct {
 	Data []byte
@@ -160,6 +162,7 @@ func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
 		sm.actionCh <- Send{msg.LeaderID,
 			AppendEntriesResp{From: sm.ServerID, Term: sm.Term, MatchIndex: -1, Success: false}}
 	} else {
+		sm.LeaderID = msg.LeaderID
 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(ElectionTimeout)}
 		check := msg.PrevLogIndex == -1
 		if !check {
@@ -343,8 +346,7 @@ func (sm *StateMachine) onAppend(msg AppendMsg) {
 		sm.Log = append(sm.Log, entry)
 		sm.actionCh <- LogStore{Entry: entry, Index: sm.LastIndex}
 	case "Follower", "Candidate":
-		//TODO: appendfollower
-
+		sm.actionCh <- CommitInfo{Index: -1, Data: msg.Data, Err: err_redirect}
 	}
 }
 

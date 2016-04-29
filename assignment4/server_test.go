@@ -223,7 +223,7 @@ func TestBasicMain(t *testing.T) {
 
 	var leader string
 
-	time.Sleep(25 * time.Second)
+	time.Sleep(100 * time.Second)
 
 	// make client connection to all the servers
 	nclients := 5

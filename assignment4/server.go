@@ -24,6 +24,7 @@ var ERR_VERSION = "ERR_VERSION "
 var ERR_FILE_NOT_FOUND = "ERR_FILE_NOT_FOUND"
 var ERR_CMD_ERR = "ERR_CMD_ERR"
 var ERR_INTERNAL = "ERR_INTERNAL"
+var ERR_REDIRECT = "ERR_REDIRECT "
 
 var MAX_CLIENTS int64 = 100000000000
 
@@ -71,6 +72,8 @@ func sendResponse(con net.Conn, cmd *utils.Cmd) bool {
 		resp = ERR_CMD_ERR
 	case "I":
 		resp = ERR_INTERNAL
+	case "R":
+		resp = "ERR_REDIRECT " + string(cmd.Content[:])
 	default:
 		fmt.Printf("Unknown response kind '%c'", cmd.Type)
 		return false
@@ -450,6 +453,7 @@ func (server *Server) serve(clientid int64, clientCommitCh chan ClientResponse, 
 			if res.Err != nil {
 				fmt.Println("REDIRECT!!")
 				msgContent := server.getAddress(server.rn.LeaderId())
+				fmt.Println("msg::", msgContent)
 				//				fmt.Printf("Leader address : %v\n", rc.LeaderId())
 				sendResponse(conn, &utils.Cmd{Type: "R", Content: []byte(msgContent)})
 				conn.Close()
