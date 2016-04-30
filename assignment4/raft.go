@@ -141,14 +141,14 @@ func (sm *StateMachine) LogIt(index int, entry LogEntry) {
 	if index < len(sm.Log) {
 		sm.Log[index] = entry
 	} else {
-		sm.Log = append(sm.Log, make([]LogEntry, index-len(sm.Log)+1)...)
+		sm.Log = append(sm.Log, make([]LogEntry, index - len(sm.Log) + 1)...)
 		sm.Log[index] = entry
 	}
 	sm.actionCh <- LogStore{Index: index, Entry: sm.Log[index]}
 }
 
 func snoozeAlarmTime(n int32) time.Duration {
-	return time.Duration(n+rand.Int31n(n)) * time.Millisecond
+	return time.Duration(n + rand.Int31n(n)) * time.Millisecond
 }
 
 func (sm *StateMachine) onAppendEntriesReq(msg AppendEntriesReq) {
@@ -220,9 +220,9 @@ func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
 				for _, index := range sm.MatchIndex {
 					matchIndices = append(matchIndices, index)
 				}
-				matchIndices = append(matchIndices, len(sm.Log)-1)
+				matchIndices = append(matchIndices, len(sm.Log) - 1)
 				sort.Ints(matchIndices)
-				n := matchIndices[NumServers/2]
+				n := matchIndices[NumServers / 2]
 				if sm.getLogTerm(n) == sm.Term {
 					oldCommitIndex := sm.CommitIndex
 					sm.CommitIndex = n
@@ -231,7 +231,7 @@ func (sm *StateMachine) onAppendEntriesResp(msg AppendEntriesResp) {
 					}
 				}
 
-				if sm.MatchIndex[msg.From] < len(sm.Log)-1 {
+				if sm.MatchIndex[msg.From] < len(sm.Log) - 1 {
 					prevLogIndex := sm.NextIndex[msg.From] - 1
 					prevLogTerm := sm.getLogTerm(prevLogIndex)
 					req := AppendEntriesReq{Term: sm.Term, LeaderID: sm.ServerID,
@@ -289,7 +289,7 @@ func (sm *StateMachine) onVoteResp(msg VoteResp) {
 		if sm.Term == msg.Term {
 			sm.VoteGranted[msg.From] = msg.VoteGranted
 		}
-		if sm.countVotes() > NumServers/2 {
+		if sm.countVotes() > NumServers / 2 {
 			sm.State = "Leader"
 			sm.LeaderID = sm.ServerID
 			sm.NextIndex = make(map[int]int)
@@ -320,7 +320,7 @@ func (sm *StateMachine) onTimeout() {
 			// Heartbeat will be empty if sm.NextIndex[peer] == len(sm.Log)
 			msg := Send{peer, AppendEntriesReq{LeaderID: sm.ServerID, Term: sm.Term,
 				PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm,
-				Entries: sm.Log[prevLogIndex+1 : len(sm.Log)], LeaderCommit: sm.CommitIndex}}
+				Entries: sm.Log[prevLogIndex + 1 : len(sm.Log)], LeaderCommit: sm.CommitIndex}}
 			sm.actionCh <- msg
 		}
 		sm.actionCh <- Alarm{AlarmTime: snoozeAlarmTime(HeartbeatTimeout)}
@@ -372,7 +372,7 @@ func (sm *StateMachine) eventLoop() {
 		case "Timeout":
 			sm.onTimeout()
 		}
-		//TODO: write handler code for Alarm, LogStore messages
+	//TODO: write handler code for Alarm, LogStore messages
 	}
 }
 

@@ -109,8 +109,6 @@ func internalWrite(fs *FS, gversion *int64, msg *utils.Cmd) *utils.Cmd {
 	}
 
 	*gversion += 1
-	fmt.Println("writing.. filename: ", msg.Filename, " content: ", msg.Content)
-	fmt.Println("database: ", fs.DB)
 	err := fs.DB.Put([]byte(msg.Filename), msg.Content, nil)
 
 	if err != nil {
@@ -118,6 +116,7 @@ func internalWrite(fs *FS, gversion *int64, msg *utils.Cmd) *utils.Cmd {
 	}
 
 	fi.Version = int64(*gversion)
+	fi.Numbytes = len(msg.Content)
 
 	var absexptime time.Time
 	if msg.Exptime > 0 {
@@ -372,7 +371,7 @@ func serverMain(id int, restartFlag string) {
 	initRaft()
 	server.rn, err = NewRaftNode(conf_all)
 
-	server.fileMap.DB, err = leveldb.OpenFile(FS_DIR+strconv.Itoa(conf_all.Id), nil)
+	server.fileMap.DB, err = leveldb.OpenFile(FS_DIR + strconv.Itoa(conf_all.Id), nil)
 	if err != nil {
 		fmt.Println("Error opening FS_DIR")
 		os.Exit(1)
@@ -410,7 +409,6 @@ func serverMain(id int, restartFlag string) {
 
 func (server *Server) serve(clientid int64, clientCommitCh chan ClientResponse, conn *net.TCPConn) {
 
-	fmt.Println("SERVING...")
 	reader := bufio.NewReader(conn)
 	var res ClientResponse
 	var response *utils.Cmd
@@ -446,26 +444,20 @@ func (server *Server) serve(clientid int64, clientCommitCh chan ClientResponse, 
 			}
 			// append the msg to the raft node log
 			server.rn.Append(dbytes)
-			fmt.Println("heybro1")
 			//wait for the msg to appear on the client commit channel
 			res = <-clientCommitCh
-			fmt.Println("heybro2")
+
 			if res.Err != nil {
-				fmt.Println("REDIRECT!!")
 				msgContent := server.getAddress(server.rn.LeaderId())
-				fmt.Println("msg::", msgContent)
-				//				fmt.Printf("Leader address : %v\n", rc.LeaderId())
 				sendResponse(conn, &utils.Cmd{Type: "R", Content: []byte(msgContent)})
 				conn.Close()
 				break
 			}
 			response = res.Message
-			//		fmt.Printf("Response Message %v\n", string(response.Contents))
 
 		} else if msg.Type == "r" {
 			response = ProcessMsg(server.fileMap, &(server.gversion), msg)
 		}
-		fmt.Printf("RESPONSE: %+v\n", response)
 
 		if !sendResponse(conn, response) {
 			conn.Close()
@@ -522,10 +514,8 @@ func (server *Server) ListenCommitChannel() {
 
 	var prevLogIndexProcessed = int64(-1)
 	for {
-		fmt.Println("listencommit-1")
 		//listen on commit channel of raft node
 		commitval := <-server.rn.CommitChannel()
-		fmt.Println("listencommit-2")
 		if commitval.Err != nil {
 			//Redirect the client. Assume the server for which this server voted is the leader. So, redirect it there.
 			dmsg, err := decode(commitval.Data)

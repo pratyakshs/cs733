@@ -138,18 +138,15 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 	if err != nil {
 		return node, err
 	}
-	fmt.Println("RaftCreated , logfile: ", conf.LogFile)
 	node.sm, err = NewStateMachineBoot(&conf, node.log)
 	if err != nil {
 		return node, err
 	}
-	fmt.Println("here1")
 
 	node.server, err = cluster.New(conf.Id, CONFIG_FILE)
 	if err != nil {
 		fmt.Println("Error in cluster")
 	}
-	fmt.Println("here2")
 
 	node.config = conf
 
@@ -159,7 +156,7 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 	//TODO: initialize other channels..
 	node.mutex = &sync.RWMutex{}
 
-	node.db, err = leveldb.OpenFile(DB_DIR+strconv.Itoa(conf.Id), nil)
+	node.db, err = leveldb.OpenFile(DB_DIR + strconv.Itoa(conf.Id), nil)
 	if err != nil {
 		return node, err
 	}
@@ -230,10 +227,9 @@ func makeRaftNodes() []RaftNode {
 func (node *RaftNode) eventLoop() {
 
 	if node.sm.State == "Leader" {
-		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout+rand.Intn(20000)) * time.Millisecond)
+		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout + rand.Intn(20000)) * time.Millisecond)
 	} else {
-		fmt.Println("TimerSet")
-		node.timer = time.NewTimer(time.Duration(ElectionTimeout+rand.Intn(2000)) * time.Millisecond)
+		node.timer = time.NewTimer(time.Duration(ElectionTimeout + rand.Intn(2000)) * time.Millisecond)
 	}
 
 	for !node.shutdown {
@@ -244,7 +240,6 @@ func (node *RaftNode) eventLoop() {
 			node.sm.eventLoop()
 		case appendMsg := <-node.clientCh:
 			node.sm.clientCh <- appendMsg
-			fmt.Println("Append msg received")
 			node.sm.eventLoop()
 		case <-node.timer.C:
 			node.sm.netCh <- Timeout{}
