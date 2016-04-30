@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pratyakshs/cs733/assignment4/utils"
 	"sync"
+
+	"github.com/pratyakshs/cs733/assignment4/utils"
 )
 
 type Client struct {
@@ -49,7 +50,7 @@ func StartAllServerProcess() {
 }
 
 func KillServer(i int) {
-	if err := fileServer[i - 1].Process.Kill(); err != nil {
+	if err := fileServer[i-1].Process.Kill(); err != nil {
 		log.Fatal("failed to kill server: ", err)
 	}
 }
@@ -244,7 +245,7 @@ func TestBasicMain(t *testing.T) {
 	clients := make([]*Client, nclients)
 	addr := [5]string{"localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"}
 	for i := 0; i < nclients; i++ {
-		cl := mkClient(t, addr[i % 5])
+		cl := mkClient(t, addr[i%5])
 		if cl == nil {
 			t.Fatalf("Unable to create client #%d", i)
 		}
@@ -274,9 +275,8 @@ func TestBasicMain(t *testing.T) {
 
 	// Sleep for some time and let the entries be replicated at followers
 
-
 	//make a client connection to follower and try to read
-	leaderId := leader[len(leader) - 1:]
+	leaderId := leader[len(leader)-1:]
 	l, _ := strconv.Atoi(leaderId)
 	var foll int
 	if l == 5 {
@@ -286,7 +286,7 @@ func TestBasicMain(t *testing.T) {
 	}
 	time.Sleep(6 * time.Second)
 
-	cl := mkClient(t, "localhost:900" + strconv.Itoa(foll))
+	cl := mkClient(t, "localhost:900"+strconv.Itoa(foll))
 	for i := 0; i < nclients; i++ {
 		filename := fmt.Sprintf("DSsystem%v", i)
 		m, err := cl.read(filename)
@@ -304,7 +304,6 @@ func TestRPC_BasicSequential(t *testing.T) {
 	// Read non-existent file cs733net
 	m, err := cl.read("cs733net")
 	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
-
 
 	// Read non-existent file cs733net
 	m, err = cl.delete("cs733net")
@@ -476,69 +475,550 @@ func TestRPC_BasicTimer(t *testing.T) {
 	fmt.Println("TestRPC_BasicTimer : Pass")
 }
 
-func TestRPC_ConcurrentWrites(t *testing.T) {
-	//	StartAllServerProcess()
-	nclients := 10 // It works for 500 clients and 5 iterations but takes time
-	niters := 5
+// nclients write to the same file. At the end the file should be any one clients' last write.
+
+//func TestRPC_ConcurrentWrites(t *testing.T) {
+//	//	StartAllServerProcess()
+//	nclients := 10 // It works for 500 clients and 5 iterations but takes time
+//	niters := 5
+//	clients := make([]*Client, nclients)
+//	addr := [5]string{"localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"}
+//	for i := 0; i < nclients; i++ {
+//		cl := mkClient(t, addr[i % 5])
+//		if cl == nil {
+//			t.Fatalf("Unable to create client #%d", i)
+//		}
+//		defer cl.close()
+//		clients[i] = cl
+//	}
+//	errCh := make(chan error, nclients)
+//	var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to begin concurrently
+//	sem.Add(1)
+//	ch := make(chan *utils.Cmd, nclients * niters) // channel for all replies
+//	for i := 0; i < nclients; i++ {
+//		go func(i int, cl *Client) {
+//			sem.Wait()
+//			for j := 0; j < niters; j++ {
+//				str := fmt.Sprintf("cl %d %d", i, j)
+//				m, err := cl.write("concWrite", str, 0)
+//				for err == nil && m.Type == "R" {
+//					cl = Redirect(t, m, cl)
+//					clients[i] = cl
+//					m, err = cl.write("concWrite", str, 0)
+//				}
+//				//			fmt.Printf("write cl %v %v successful \n",i,j)
+//				if err != nil {
+//					errCh <- err
+//					break
+//				} else {
+//					ch <- m
+//				}
+//			}
+//		}(i, clients[i])
+//	}
+//	time.Sleep(100 * time.Millisecond) // give goroutines a chance
+//	sem.Done()                         // Go!
+//
+//	// There should be no errors
+//	for i := 0; i < nclients * niters; i++ {
+//		select {
+//		case m := <-ch:
+//			if m.Type != "O" {
+//				t.Fatalf("Concurrent write failed with kind=%c", m.Type)
+//			}
+//		case err := <-errCh:
+//			t.Fatal(err)
+//		}
+//	}
+//	m, _ := clients[0].read("concWrite")
+//
+//	// Ensure the contents are of the form "cl <i> 4"
+//	// The last write of any client ends with " 4"
+//	if !(m.Type == "C" && strings.HasSuffix(string(m.Content), "4")) {
+//		t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
+//	}
+//
+//	//	KillAllServerProcess()
+//	fmt.Println("TestRPC_ConcurrentWrites : Pass")
+//}
+
+// nclients cas to the same file. At the end the file should be any one clients' last write.
+// The only difference between this test and the ConcurrentWrite test above is that each
+// client loops around until each CAS succeeds. The number of concurrent clients has been
+// reduced to keep the testing time within limits.
+//func TestRPC_ConcurrentCas(t *testing.T) {
+//	//	StartAllServerProcess()
+//	nclients := 5
+//	niters := 2
+//	addr := [5]string{"localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"}
+//	clients := make([]*Client, nclients)
+//	for i := 0; i < nclients; i++ {
+//		cl := mkClient(t, addr[i % 5])
+//		if cl == nil {
+//			t.Fatalf("Unable to create client #%d", i)
+//		}
+//		defer cl.close()
+//		clients[i] = cl
+//	}
+//
+//	var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to *begin* concurrently
+//	sem.Add(1)
+//
+//	m, err := clients[0].write("concCas", "first", 0)
+//	for err == nil && m.Type == "R" {
+//		clients[0] = Redirect(t, m, clients[0])
+//		m, err = clients[0].write("concCas", "first", 0)
+//	}
+//	ver := m.Version
+//	if m.Type != "O" || ver == 0 {
+//		t.Fatalf("Expected write to succeed and return version")
+//	}
+//
+//	var wg sync.WaitGroup
+//	wg.Add(nclients)
+//
+//	errorCh := make(chan error, nclients)
+//
+//	for i := 0; i < nclients; i++ {
+//		go func(i int, ver int, cl *Client) {
+//			sem.Wait()
+//			defer wg.Done()
+//			for j := 0; j < niters; j++ {
+//				str := fmt.Sprintf("cl %d %d", i, j)
+//				for {
+//					m, err := cl.cas("concCas", ver, str, 0)
+//					for err == nil && m.Type == "R" {
+//						cl = Redirect(t, m, cl)
+//						clients[i] = cl
+//						m, err = cl.cas("concCas", ver, str, 0)
+//					}
+//
+//					if err != nil {
+//						errorCh <- err
+//						return
+//					} else if m.Type == "O" {
+//						//						fmt.Printf("cas cl %v %v successful \n",i,j)
+//						break
+//					} else if m.Type != "V" {
+//						errorCh <- errors.New(fmt.Sprintf("Expected 'V' msg, got %c", m.Type))
+//						return
+//					}
+//					ver = int(m.Version) // retry with latest version
+//				}
+//			}
+//		}(i, int(ver), clients[i])
+//	}
+//
+//	time.Sleep(100 * time.Millisecond) // give goroutines a chance
+//	sem.Done()                         // Start goroutines
+//	wg.Wait()                          // Wait for them to finish
+//	select {
+//	case e := <-errorCh:
+//		t.Fatalf("Error received while doing cas: %v", e)
+//	default: // no errors
+//	}
+//	m, _ = clients[0].read("concCas")
+//	if !(m.Type == "C" && strings.HasSuffix(string(m.Content), " 1")) {
+//		t.Fatalf("Expected to be able to read after 1000 writes. Got msg.Type = %d, msg.Content=%s", m.Type, m.Content)
+//	}
+//
+//	//	KillAllServerProcess()
+//	fmt.Println("TestRPC_ConcurrentCas : Pass")
+//}
+
+func Test_FollowerFailure(t *testing.T) {
+	StartAllServerProcess()
+	nclients := 10
+	var leader string
+
+	//make 5 clients and make connections to the server
 	clients := make([]*Client, nclients)
 	addr := [5]string{"localhost:9001", "localhost:9002", "localhost:9003", "localhost:9004", "localhost:9005"}
 	for i := 0; i < nclients; i++ {
-		cl := mkClient(t, addr[i % 5])
+		cl := mkClient(t, addr[i%5])
 		if cl == nil {
 			t.Fatalf("Unable to create client #%d", i)
 		}
 		defer cl.close()
 		clients[i] = cl
 	}
-	errCh := make(chan error, nclients)
+	done := make(chan bool)
+	// 10 Clients simultaneously attempt to write to a file
 	var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to begin concurrently
 	sem.Add(1)
-	ch := make(chan *utils.Cmd, nclients * niters) // channel for all replies
 	for i := 0; i < nclients; i++ {
 		go func(i int, cl *Client) {
 			sem.Wait()
-			for j := 0; j < niters; j++ {
-				str := fmt.Sprintf("cl %d %d", i, j)
-				m, err := cl.write("concWrite", str, 0)
-				for err == nil && m.Type == "R" {
-					cl = Redirect(t, m, cl)
-					clients[i] = cl
-					m, err = cl.write("concWrite", str, 0)
-				}
-				//			fmt.Printf("write cl %v %v successful \n",i,j)
-				if err != nil {
-					errCh <- err
-					break
-				} else {
-					ch <- m
-				}
+			str := fmt.Sprintf("cl %d", i)
+			m, err := cl.write("concWrite", str, 0)
+			for err == nil && m.Type == "R" {
+				leader = string(m.Content)
+				cl = Redirect(t, m, cl)
+				clients[i] = cl
+				m, err = cl.write("concWrite", str, 0)
 			}
+			done <- true
 		}(i, clients[i])
+
 	}
 	time.Sleep(100 * time.Millisecond) // give goroutines a chance
-	sem.Done()                         // Go!
+	sem.Done()
+	for i := 1; i <= nclients; i++ {
+		<-done
+	}
+	//As soon as all the responses are received, kill a follower Node.
+	// Note : Some of the appends may not have been received at this follower
+	leaderId := leader[len(leader)-1:]
+	l, _ := strconv.Atoi(leaderId)
+	var foll int
+	if l == 5 {
+		foll = 1
+	} else {
+		foll = l + 1
+	}
 
-	// There should be no errors
-	for i := 0; i < nclients * niters; i++ {
-		select {
-		case m := <-ch:
-			if m.Type != "O" {
-				t.Fatalf("Concurrent write failed with kind=%c", m.Type)
-			}
-		case err := <-errCh:
-			t.Fatal(err)
+	KillServer(foll)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Make a client connect to the leader and create 2 new files and delete the previous file
+	cl := mkClient(t, leader)
+
+	m, err := cl.write("cloudSuspense", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("cloudSuspense", "zoo", 0)
+	}
+
+	data := "Cloud fun"
+	m, err = cl.write("cs733net", data, 0)
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("cs733net", data, 0)
+
+	}
+
+	m, err = cl.delete("concWrite")
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.delete("concWrite")
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Bring back the follower
+	StartServer(foll, "false")
+	time.Sleep(4 * time.Second) // wait for some time for the entries to be replicated and then read the three files
+
+	follower := "localhost:900" + strconv.Itoa(foll)
+	// Make a client connection to the follower and start reading
+	cl = mkClient(t, follower)
+
+	m, err = cl.read("cloudSuspense")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "read my write", err)
+
+	m, err = cl.read("cs733net")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("Cloud fun")}, "read cloud fun", err)
+
+	m, err = cl.read("concWrite")
+	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
+
+	KillAllServerProcess()
+	fmt.Println("Test_FollowerFailure : Pass")
+
+}
+
+//In this test case, we do a few writes on the leader, then kill the leader.
+//Wait for the new leader to be elected and then do a few writes on the new leader.
+//After sometime, we bring the previous leader back and waited for sometime for
+//entries to be replicated on the previous leader and then read the modified files.
+
+func Test_LeaderFailure(t *testing.T) {
+	StartAllServerProcess()
+
+	var leader string = "localhost:9001"
+
+	cl := mkClient(t, "localhost:9001")
+
+	m, err := cl.write("cloudSuspense", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		leader = string(m.Content)
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("cloudSuspense", "zoo", 0)
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderFailure : cloudSuspensesuccess", err)
+
+	data := "Cloud fun"
+	m, err = cl.write("cs733net", data, 0)
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("cs733net", data, 0)
+
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderFailure : cloudFun suspense", err)
+
+	//Kill leader
+	leaderId := leader[len(leader)-1:]
+	l, _ := strconv.Atoi(leaderId)
+	KillServer(l)
+
+	// wait for few seconds for one of the node to timeout and a new leader to get elected
+	time.Sleep(10 * time.Second)
+
+	if l == 1 {
+		cl = mkClient(t, "localhost:9002")
+	} else {
+		cl = mkClient(t, "localhost:9001")
+	}
+
+	// Now issue another command
+	m, err = cl.delete("cs733net")
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.delete("cs733net")
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderFailure : Deletecs733success", err)
+
+	m, err = cl.write("DSystems", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("Dsystems", "zoo", 0)
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderFailure : DSystemsSuccess", err)
+
+	// Bring back the previous leader
+	StartServer(l, "true")
+	time.Sleep(10 * time.Second)
+	// make client connection with the previous leader and read all the above changes
+	cl = mkClient(t, leader)
+
+	m, err = cl.read("cs733net")
+	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
+
+	m, err = cl.read("DSystems")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "read my write", err)
+
+	m, err = cl.read("cloudSuspense")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "read my write", err)
+
+	KillAllServerProcess()
+	fmt.Println("Test_LeaderFailure : Pass")
+}
+
+// ########################################## Testing multiple leader failures ##################################################
+
+// In this test case, we kill 3 consecutive leaders and check if at the end all the changes committed
+// by each of the leader are reflected in the file system.
+
+func Test_LeaderMultipleFailure(t *testing.T) {
+
+	StartAllServerProcess()
+
+	var leader string = "localhost:9001"
+
+	// All nodes are working system should work
+	cl := mkClient(t, "localhost:9001")
+
+	m, err := cl.write("cloudSuspense", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		leader = string(m.Content)
+		cl = Redirect(t, m, cl)
+		//		fmt.Printf("redirected to: %v\n", string(m.Content))
+		m, err = cl.write("cloudSuspense", "zoo", 0)
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure: Write CloudSuspense success", err)
+
+	m, err = cl.read("cloudSuspense")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "Test_LeaderMultipleFailure: cloudSuspense read 0", err)
+
+	//Kill the leader
+	leaderId := leader[len(leader)-1:]
+	l, _ := strconv.Atoi(leaderId)
+	KillServer(l)
+
+	previousLeader := l
+
+	// wait for few seconds for one of the node to timeout and a new leader to get elected
+	time.Sleep(10 * time.Second)
+
+	//system should still work
+	if l == 1 {
+		cl = mkClient(t, "localhost:9002")
+		leader = "localhost:9002"
+	} else {
+		cl = mkClient(t, "localhost:9001")
+		leader = "localhost:9001"
+	}
+
+	m, err = cl.write("Dsystems", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		leader = string(m.Content)
+		cl = Redirect(t, m, cl)
+		//		fmt.Printf("redirected to: %v\n", string(m.Content))
+		m, err = cl.write("Dsystems", "zoo", 0)
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure : DSystemsSuccess", err)
+
+	m, err = cl.read("Dsystems")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "Test_LeaderMultipleFailure: DSystems read 0", err)
+
+	// Now kill the leader again
+	leaderId = leader[len(leader)-1:]
+	l, _ = strconv.Atoi(leaderId)
+	KillServer(l)
+
+	// wait for few seconds for one of the node to timeout and a new leader to get elected.
+	time.Sleep(10 * time.Second)
+
+	//system should still work
+	if l != 1 && previousLeader != 1 {
+		cl = mkClient(t, "localhost:9001")
+		leader = "localhost:9001"
+	} else if l != 2 && previousLeader != 2 {
+		cl = mkClient(t, "localhost:9002")
+		leader = "localhost:9002"
+	} else if l != 3 && previousLeader != 3 {
+		cl = mkClient(t, "localhost:9003")
+		leader = "localhost:9003"
+	}
+
+	m, err = cl.delete("cloudSuspense")
+	for err == nil && m.Type == "R" {
+		leader = string(m.Content)
+		cl = Redirect(t, m, cl)
+		//		fmt.Printf("redirected to: %v\n", string(m.Content))
+		m, err = cl.delete("cloudSuspense")
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure : DeletecloudSuspensesuccess", err)
+
+	data := "Cloud fun"
+	m, err = cl.write("cs733net", data, 0)
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		//		fmt.Printf("redirected to: %v\n", string(m.Content))
+		m, err = cl.write("cs733net", data, 0)
+
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure : write cs733 success", err)
+
+	// Bring back the first node killed
+	StartServer(previousLeader, "true")
+
+	time.Sleep(5 * time.Second)
+
+	previousLeader = l
+
+	// Kill the leader again
+	leaderId = leader[len(leader)-1:]
+	l, _ = strconv.Atoi(leaderId)
+	KillServer(l)
+
+	// wait for few seconds for one of the node to timeout and a new leader to get elected
+	time.Sleep(10 * time.Second)
+
+	//system should still work
+	if l != 1 && previousLeader != 1 {
+		cl = mkClient(t, "localhost:9001")
+		leader = "localhost:9001"
+	} else if l != 2 && previousLeader != 2 {
+		cl = mkClient(t, "localhost:9002")
+		leader = "localhost:9002"
+	} else if l != 3 && previousLeader != 3 {
+		cl = mkClient(t, "localhost:9003")
+		leader = "localhost:9003"
+	}
+
+	m, err = cl.delete("Dsystems")
+	for err == nil && m.Type == "R" {
+		cl = Redirect(t, m, cl)
+		//		fmt.Printf("redirected to: %v\n", string(m.Content))
+		m, err = cl.delete("Dsystems")
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure : DeleteDSystemssuccess", err)
+
+	// Bring back the previous leader
+	StartServer(previousLeader, "true")
+	time.Sleep(10 * time.Second)
+
+	follower := "localhost:900" + strconv.Itoa(previousLeader)
+	// make client connection with the follower and read all the above changes
+	cl = mkClient(t, follower)
+
+	// check the status of files modified by previous servers and confirm if they are as expected
+	m, err = cl.read("cs733net")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("Cloud fun")}, "Test_LeaderMultipleFailure: Cs733 read", err)
+
+	m, err = cl.read("Dsystems")
+	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
+	//	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("zoo")}, "Test_LeaderMultipleFailure: DSystems read", err)
+
+	m, err = cl.read("cloudSuspense")
+	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
+
+	KillAllServerProcess()
+	fmt.Println("Test_LeaderMultipleFailure : Pass")
+}
+
+//################################### What if minority of nodes are alive ? ################################################
+
+func Test_MajorityNodeFailure(t *testing.T) {
+
+	StartAllServerProcess()
+
+	var leader string = "localhost:9001"
+
+	// All nodes are working system should work
+	cl := mkClient(t, "localhost:9001")
+
+	m, err := cl.write("cloudSuspense", "zoo", 0)
+	for err == nil && m.Type == "R" {
+		leader = string(m.Content)
+		cl = Redirect(t, m, cl)
+		m, err = cl.write("cloudSuspense", "zoo", 0)
+	}
+	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure: Write CloudSuspense success", err)
+	time.Sleep(1 * time.Second)
+
+	// Kill 3 followers .
+	leaderId := leader[len(leader)-1:]
+	l, _ := strconv.Atoi(leaderId)
+
+	for i := 1; i <= 3; i++ {
+		KillServer((l+i)%5 + 1)
+	}
+	// give an append to leader. The client will hang and wait for response and leader will indefinitely try to get votes from majority
+	var sem sync.WaitGroup
+	sem.Add(1)
+	go func() {
+		data := "Cloud fun"
+		m, err = cl.write("cs733net", data, 0)
+		for err == nil && m.Type == "R" {
+			cl = Redirect(t, m, cl)
+			m, err = cl.write("cs733net", data, 0)
+
 		}
-	}
-	m, _ := clients[0].read("concWrite")
+		//	expect(t, m, &utils.Cmd{Type: "O"}, "Test_LeaderMultipleFailure : write cs733 success", err)
+		sem.Done()
+	}()
 
-	// Ensure the contents are of the form "cl <i> 4"
-	// The last write of any client ends with " 4"
-	if !(m.Type == "C" && strings.HasSuffix(string(m.Content), "4")) {
-		t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
+	time.Sleep(5 * time.Second) // client is stuck for this period
+
+	cl1 := mkClient(t, leader)
+	m, err = cl1.read("cs733net")
+	expect(t, m, &utils.Cmd{Type: "F"}, "file not found", err)
+
+	// Now start servers
+	for i := 1; i <= 3; i++ {
+		StartServer((l+i)%5+1, "true")
 	}
 
-	//	KillAllServerProcess()
-	fmt.Println("TestRPC_ConcurrentWrites : Pass")
+	sem.Wait()
+
+	m, err = cl1.read("cs733net")
+	expect(t, m, &utils.Cmd{Type: "C", Content: []byte("Cloud fun")}, "file not found", err)
+
+	KillAllServerProcess()
+	fmt.Println("Test_MajorityNodeFailure : Pass")
 }
 
 func (cl *Client) read(filename string) (*utils.Cmd, error) {
@@ -562,7 +1042,7 @@ func expect(t *testing.T, response *utils.Cmd, expected *utils.Cmd, errstr strin
 	}
 	if response.Type == "C" {
 		if expected.Content != nil &&
-		bytes.Compare(response.Content, expected.Content) != 0 {
+			bytes.Compare(response.Content, expected.Content) != 0 {
 			ok = false
 		}
 	}

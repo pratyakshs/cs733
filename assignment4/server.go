@@ -371,7 +371,7 @@ func serverMain(id int, restartFlag string) {
 	initRaft()
 	server.rn, err = NewRaftNode(conf_all)
 
-	server.fileMap.DB, err = leveldb.OpenFile(FS_DIR + strconv.Itoa(conf_all.Id), nil)
+	server.fileMap.DB, err = leveldb.OpenFile(FS_DIR+strconv.Itoa(conf_all.Id), nil)
 	if err != nil {
 		fmt.Println("Error opening FS_DIR")
 		os.Exit(1)
@@ -563,7 +563,6 @@ func (server *Server) ListenCommitChannel() {
 
 func main() {
 	id := os.Args[1]
-	restartFlag := os.Args[2]
 	serverId, _ := strconv.Atoi(id)
-	serverMain(serverId, restartFlag)
+	serverMain(serverId, "false")
 }

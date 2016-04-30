@@ -156,7 +156,7 @@ func NewRaftNode(conf Config) (RaftNode, error) {
 	//TODO: initialize other channels..
 	node.mutex = &sync.RWMutex{}
 
-	node.db, err = leveldb.OpenFile(DB_DIR + strconv.Itoa(conf.Id), nil)
+	node.db, err = leveldb.OpenFile(DB_DIR+strconv.Itoa(conf.Id), nil)
 	if err != nil {
 		return node, err
 	}
@@ -227,9 +227,9 @@ func makeRaftNodes() []RaftNode {
 func (node *RaftNode) eventLoop() {
 
 	if node.sm.State == "Leader" {
-		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout + rand.Intn(20000)) * time.Millisecond)
+		node.timer = time.NewTimer(time.Duration(HeartbeatTimeout+rand.Intn(20000)) * time.Millisecond)
 	} else {
-		node.timer = time.NewTimer(time.Duration(ElectionTimeout + rand.Intn(2000)) * time.Millisecond)
+		node.timer = time.NewTimer(time.Duration(ElectionTimeout+rand.Intn(2000)) * time.Millisecond)
 	}
 
 	for !node.shutdown {
